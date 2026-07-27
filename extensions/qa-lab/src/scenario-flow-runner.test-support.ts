@@ -7,7 +7,7 @@ type QaFlowStep = {
   run: () => Promise<string | void>;
 };
 
-function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
+export function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
   return state
     .getSnapshot()
     .messages.map((message) => `${message.direction}:${message.conversation.id}:${message.text}`)

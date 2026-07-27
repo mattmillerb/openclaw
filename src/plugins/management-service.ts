@@ -15,6 +15,7 @@ import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -703,6 +704,33 @@ export function resolveManagedSetupCatalogIconUrl(params: {
     return undefined;
   }
   const env = params.env ?? process.env;
+  try {
+    const registryUrl = new URL(resolveClawHubBaseUrl(env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL));
+    const requestedUrl = new URL(requested);
+    const registryPathPrefix = registryUrl.pathname.replace(/\/+$/u, "");
+    // Skill icons are registry-owned, not caller-owned; pin the entire URL to
+    // the configured registry so the authenticated proxy cannot become SSRF.
+    if (
+      registryUrl.protocol === "https:" &&
+      !registryUrl.username &&
+      !registryUrl.password &&
+      !registryUrl.search &&
+      !registryUrl.hash &&
+      requestedUrl.origin === registryUrl.origin &&
+      !requestedUrl.username &&
+      !requestedUrl.password &&
+      !requestedUrl.search &&
+      !requestedUrl.hash &&
+      requestedUrl.pathname.startsWith(`${registryPathPrefix}/`) &&
+      /^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(
+        requestedUrl.pathname.slice(registryPathPrefix.length),
+      )
+    ) {
+      return requestedUrl.href;
+    }
+  } catch {
+    // Malformed registry configuration must never authorize a proxy target.
+  }
   const allowedUrls = [
     ...resolveManifestProviderAuthChoices({
       config: params.config,

@@ -31,6 +31,7 @@ export type QaScenarioRuntimeDeps = {
   sleep: (ms?: number) => Promise<unknown>;
   randomUUID: () => string;
   runScenario: QaScenarioRuntimeFunction;
+  startQaOtlpTraceReceiver: QaScenarioRuntimeFunction;
   waitForOutboundMessage: QaScenarioRuntimeFunction;
   waitForNoOutbound: QaScenarioRuntimeFunction;
   waitForNoTransportOutbound: QaScenarioRuntimeFunction;

@@ -787,6 +787,11 @@ describe("subagent registry lifecycle error grace", () => {
     // requester-settle wake should be emitted after successful delivery.
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
+    const recoveredRun = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-timeout-cancel");
+    expect(recoveredRun?.execution.outcome?.status).toBe("ok");
+    expect(recoveredRun?.delivery?.status).toBe("delivered");
     const readIdempotencyKey = (request: GatewayRequest) => {
       const key = (request.params as Record<string, unknown> | undefined)?.idempotencyKey;
       return typeof key === "string" ? key : "";

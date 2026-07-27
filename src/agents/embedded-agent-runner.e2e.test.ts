@@ -415,7 +415,10 @@ describe("runEmbeddedAgent", () => {
             primary: "openrouter/global-default",
           },
         },
-        list: [{ id: "research", model: "openrouter/research-default" }],
+        entries: {
+          main: { default: true },
+          research: { model: "openrouter/research-default" },
+        },
       },
     };
     mockSuccessfulEmbeddedAttempt();
@@ -493,12 +496,12 @@ describe("runEmbeddedAgent", () => {
         defaults: {
           model: { primary: "openai/mock-1" },
         },
-        list: [
-          {
-            id: "research",
+        entries: {
+          main: { default: true },
+          research: {
             model: { primary: "anthropic/claude-opus-4-7" },
           },
-        ],
+        },
       },
     };
     mockSuccessfulEmbeddedAttempt();

@@ -65,6 +65,51 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
+export function readCompletedSubagentHandoffResult(allInputText: string): string | undefined {
+  const eventStart = Math.max(
+    allInputText.lastIndexOf("[Internal task completion event]"),
+    allInputText.lastIndexOf(
+      "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+    ),
+  );
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = allInputText.slice(eventStart);
+  if (
+    !/^source:\s*subagent\s*$/im.test(completionEvent) ||
+    !/^task:\s*qa-sidecar\s*$/im.test(completionEvent) ||
+    !/^status:\s*(?:completed successfully|completed; ready for parent review)\s*$/im.test(
+      completionEvent,
+    )
+  ) {
+    return undefined;
+  }
+  const childResult =
+    /^Child result(?:\s*\([^\r\n]*\))?\s*:\s*\r?\n<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/im
+      .exec(completionEvent)?.[1]
+      ?.trim();
+  if (!childResult || childResult === "(no output)") {
+    return undefined;
+  }
+  if (childResult.startsWith("{")) {
+    try {
+      const payload: unknown = JSON.parse(childResult);
+      if (
+        payload &&
+        typeof payload === "object" &&
+        "status" in payload &&
+        payload.status === "accepted"
+      ) {
+        return undefined;
+      }
+    } catch {
+      // The protected child result is ordinary user-facing text, not required JSON.
+    }
+  }
+  return childResult.replace(/\s+/g, " ");
+}
+
 export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
 
 function isCompactionRetryWritePatch(value: unknown): boolean {
@@ -144,6 +189,17 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
+  const completedSubagentResult = readCompletedSubagentHandoffResult(allInputText);
+  if (completedSubagentResult) {
+    return [
+      "Delegated task:",
+      "- Inspect the QA workspace via a bounded subagent.",
+      "Result:",
+      `- ${completedSubagentResult}`,
+      "Evidence:",
+      "- The successful qa-sidecar child completed and its actual result was delivered.",
+    ].join("\n");
+  }
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =

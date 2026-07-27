@@ -15,6 +15,7 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
@@ -23,6 +24,8 @@ import {
 } from "./providers/shared/debug-request-cursor.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { summarizeToolSearchProviderRequests } from "./tool-search-gateway-request-evidence.js";
+import { readTargetToolIdentity } from "./tool-search-gateway-tool-identity.js";
 
 type Lane = "normal" | "code" | "tools";
 
@@ -362,33 +365,6 @@ async function configureLane(params: {
   });
 }
 
-async function readTargetToolIdentity(params: {
-  env: QaSuiteRuntimeEnv;
-  sessionKey: string;
-  targetTool: string;
-}) {
-  const payload = (await params.env.gateway.call(
-    "tools.effective",
-    { sessionKey: params.sessionKey },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 90_000) },
-  )) as {
-    groups?: Array<{
-      tools?: Array<{ id?: string; source?: string; pluginId?: string }>;
-    }>;
-  };
-  for (const group of payload.groups ?? []) {
-    for (const tool of group.tools ?? []) {
-      if (tool.id === params.targetTool) {
-        return {
-          source: tool.source?.trim() ?? "",
-          pluginId: tool.pluginId?.trim() ?? "",
-        };
-      }
-    }
-  }
-  throw new Error(`tools.effective did not report ${params.targetTool}`);
-}
-
 export async function stageToolSearchGatewayFixture(params: {
   env: QaSuiteRuntimeEnv;
   targetTool?: string;
@@ -424,37 +400,60 @@ export async function runToolSearchGatewayLane(params: {
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
   const sessionKey = `tool-search-gateway-${params.lane}`;
-  const response = await fetchJson(
-    `${params.env.gateway.baseUrl}/v1/responses`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${gatewayToken}`,
-        "content-type": "application/json",
-        "x-openclaw-scopes": "operator.write",
-        "x-openclaw-agent": "qa",
-        "x-openclaw-session-key": sessionKey,
+  let response: unknown;
+  try {
+    response = await fetchJson(
+      `${params.env.gateway.baseUrl}/v1/responses`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${gatewayToken}`,
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.write",
+          "x-openclaw-agent": "qa",
+          "x-openclaw-session-key": sessionKey,
+        },
+        body: JSON.stringify({
+          model: "openclaw/qa",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `tool search qa check target=${params.fixture.targetTool}`,
+                },
+              ],
+            },
+          ],
+          max_output_tokens: 256,
+          stream: false,
+        }),
       },
-      body: JSON.stringify({
-        model: "openclaw/qa",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `tool search qa check target=${params.fixture.targetTool}`,
-              },
-            ],
-          },
-        ],
-        max_output_tokens: 256,
-        stream: false,
-      }),
-    },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
-  );
+      { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
+    );
+  } catch (error) {
+    // Gateway Responses intentionally redacts provider failures. Preserve the
+    // failure and expose only bounded fixture-owned discovery evidence.
+    const requests = await fetchJson(
+      qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
+    ).catch(() => []);
+    const safeRequests = summarizeToolSearchProviderRequests(requests, params.fixture.targetTool);
+    const mentions = await countToolSearchSessionLogMentions({
+      stateDir,
+      targetTool: params.fixture.targetTool,
+    }).catch(() => null);
+    const details = error instanceof Error ? error.message : String(error);
+    const safeLogs = formatQaGatewayLogsForError(
+      truncateUtf16Safe(params.env.gateway.logs?.() ?? "", 4_000),
+    );
+    throw new Error(
+      `Tool Search ${params.lane} lane gateway request failed: ${details}; ` +
+        `providerRequests=${JSON.stringify(safeRequests)}; sessionMentions=${JSON.stringify(mentions)}${safeLogs}`,
+      { cause: error },
+    );
+  }
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
   )) as Array<{
