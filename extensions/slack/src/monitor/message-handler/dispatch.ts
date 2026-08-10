@@ -394,6 +394,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         commentaryProgressEnabled: progress.commentaryProgressEnabled ? true : undefined,
         progressPreambleEnabled:
           progress.progressDraftActive && slackStreaming.mode === "progress" ? true : undefined,
+        commentaryPayloadsEnabled: progress.commentaryProgressEnabled ? true : undefined,
+        shouldDeliverCommentaryPayloads: progress.commentaryProgressEnabled
+          ? progress.shouldYieldDraftProgress
+          : undefined,
         onVerboseProgressVisibility: progress.commentaryProgressEnabled
           ? (isActive) => {
               progress.setShouldYieldDraftProgress(isActive);
