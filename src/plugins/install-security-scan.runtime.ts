@@ -19,6 +19,7 @@ import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
   InstallPolicyWarningDetails,
+  InstallPolicyWarningOccurrence,
   InstallSafetyOverrides,
 } from "./install-security-scan.types.js";
 
@@ -109,7 +110,7 @@ export type InstallSecurityScanResult = {
   blocked?: {
     code?: "security_scan_blocked" | "security_scan_failed";
     reason: string;
-    installPolicyWarning?: InstallPolicyWarningDetails;
+    installPolicyWarning?: InstallPolicyWarningOccurrence;
   };
 };
 
@@ -829,11 +830,20 @@ async function runOperatorInstallPolicy(params: {
     reason: result.warning.reason,
     ...(result.findings?.length ? { findings: result.findings } : {}),
   };
+  const warningOccurrence: InstallPolicyWarningOccurrence = {
+    scan: {
+      requestKind: params.requestKind,
+      originType: params.origin.type,
+      ...(params.plugin ? { pluginContentType: params.plugin.contentType } : {}),
+      ...(params.skill ? { skillInstallId: params.skill.installId } : {}),
+    },
+    warning: installPolicyWarning,
+  };
   if (!params.onInstallPolicyWarning) {
     return {
       blocked: {
         code: "security_scan_blocked",
-        installPolicyWarning,
+        installPolicyWarning: warningOccurrence,
         reason: formatInstallPolicyNotice({
           decision: "warn",
           findings: result.findings,
@@ -850,7 +860,7 @@ async function runOperatorInstallPolicy(params: {
     targetName: params.targetName,
     targetType: params.targetType,
     requestMode: params.requestMode,
-    warning: installPolicyWarning,
+    ...warningOccurrence,
   });
   if (acknowledgement.status === "approved") {
     const reevaluated = await evaluatePolicy();
@@ -877,11 +887,14 @@ async function runOperatorInstallPolicy(params: {
           blocked: {
             code: "security_scan_blocked",
             installPolicyWarning: {
-              targetName: params.targetName,
-              targetType: params.targetType,
-              requestMode: params.requestMode,
-              reason: reevaluated.warning.reason,
-              ...(reevaluated.findings?.length ? { findings: reevaluated.findings } : {}),
+              scan: warningOccurrence.scan,
+              warning: {
+                targetName: params.targetName,
+                targetType: params.targetType,
+                requestMode: params.requestMode,
+                reason: reevaluated.warning.reason,
+                ...(reevaluated.findings?.length ? { findings: reevaluated.findings } : {}),
+              },
             },
             reason: formatInstallPolicyNotice({
               decision: "warn",
@@ -925,7 +938,7 @@ async function runOperatorInstallPolicy(params: {
   return {
     blocked: {
       code: "security_scan_blocked",
-      installPolicyWarning,
+      installPolicyWarning: warningOccurrence,
       reason: "Install cancelled: the install policy warning was not approved.",
     },
   };
