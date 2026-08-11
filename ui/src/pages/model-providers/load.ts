@@ -87,6 +87,7 @@ export async function loadModelProvidersData(
       request<ModelProvidersCatalogResult>("models.list", {
         view: "all",
         includeProviderCapabilities: true,
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       })
         .then((result) => result ?? null)
         .catch(() => null),

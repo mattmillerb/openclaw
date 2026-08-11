@@ -21,6 +21,7 @@ import {
   renderChatModelControls,
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
+import { loadModels } from "../chat/models.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 const NEW_SESSION_METADATA_RETRY_WINDOW_MS = 60_000;
@@ -105,14 +106,13 @@ async function requestNewSessionMetadata(
     }
 
     try {
-      return await client.request<{ models?: ModelCatalogEntry[] }>(
-        "chat.metadata",
-        { agentId },
-        {
-          signal,
-          timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
-        },
-      );
+      const models = await loadModels(client, {
+        agentId,
+        refresh: true,
+        signal,
+        timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
+      });
+      return { models };
     } catch (error) {
       const requestError =
         error instanceof Error

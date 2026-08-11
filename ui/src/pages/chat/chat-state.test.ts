@@ -1635,6 +1635,26 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("surfaces a first-load models.list failure instead of publishing an empty catalog", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        throw new Error("live model discovery failed");
+      }
+      expect(method).toBe("commands.list");
+      return { commands: [] };
+    });
+    const state = createMetadataState(request, {
+      chatModelCatalog: [],
+      hello: { features: { methods: [] } },
+      sessionKey: "agent:main:main",
+    });
+
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalogError).toBe("live model discovery failed");
+  });
+
   it("preserves startup models when the gateway does not advertise chat metadata", async () => {
     const request = vi.fn(async (method: string) => {
       expect(method).toBe("commands.list");

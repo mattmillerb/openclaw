@@ -71,6 +71,18 @@ describe("buildModelProviderCards", () => {
     });
   });
 
+  it("keeps a provider ready when any saved profile has a ready catalog", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      providerOutcomes: [
+        { provider: "openai", profileId: "openai:rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "openai:ready", status: "ready" },
+      ],
+    });
+
+    expect(firstCard(cards)).toMatchObject({ id: "openai", catalogStatus: "ready" });
+  });
+
   it("propagates explicit API-key capability onto provider cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,

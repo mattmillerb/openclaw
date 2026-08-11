@@ -225,9 +225,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   const outcomeSeverity: ReadonlyArray<ModelCatalogProviderOutcome["status"]> = [
-    "auth-rejected",
-    "unavailable",
     "ready",
+    "unavailable",
+    "auth-rejected",
   ];
   for (const outcome of input.providerOutcomes ?? []) {
     const id = canonicalProviderId(outcome.provider);

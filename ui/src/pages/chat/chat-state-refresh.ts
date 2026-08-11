@@ -155,6 +155,7 @@ function applyChatMetadataResult(
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
     host.chatModelCatalog = models;
+    host.chatModelCatalogError = null;
   }
   const commandsApplied =
     fields.commands === false
@@ -183,12 +184,20 @@ async function refreshCompatibilityModelCatalog(
   const agentId = canUseCompatibilityModelCatalog(request.host, request.agentId)
     ? undefined
     : request.agentId?.trim() || undefined;
-  const models = await loadModels(request.client, {
-    ...(agentId ? { agentId } : {}),
-    ...(opts?.refresh ? { refresh: true } : {}),
-  });
-  if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = models;
+  try {
+    const models = await loadModels(request.client, {
+      ...(agentId ? { agentId } : {}),
+      ...(opts?.refresh ? { refresh: true } : {}),
+    });
+    if (ownsChatMetadataRequest(request)) {
+      request.host.chatModelCatalog = models;
+      request.host.chatModelCatalogError = null;
+    }
+  } catch (error) {
+    if (ownsChatMetadataRequest(request)) {
+      request.host.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+    }
+    throw error;
   }
 }
 
@@ -237,6 +246,7 @@ export async function refreshChatMetadata(
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogError = null;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {
@@ -246,6 +256,7 @@ export async function refreshChatMetadata(
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
+  host.chatModelCatalogError = null;
   try {
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
       await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);

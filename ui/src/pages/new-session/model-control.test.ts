@@ -151,7 +151,10 @@ describe("new-session model runtime", () => {
     await vi.waitFor(() => {
       const container = renderControl(control, context);
       expect(container.querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull();
-      expect(container.querySelector('[data-chat-model-target="anthropic"]')).not.toBeNull();
+      expect(
+        container.querySelector<HTMLButtonElement>('[data-chat-model-target="anthropic"]')
+          ?.disabled,
+      ).toBe(false);
       expect(container.textContent).not.toContain("History only");
     });
 
@@ -785,8 +788,8 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
-        "chat.metadata",
-        { agentId: "main" },
+        "models.list",
+        { view: "configured", agentId: "main" },
         expect.objectContaining({
           signal: expect.any(AbortSignal),
         }),
@@ -937,16 +940,16 @@ describe("new-session model runtime", () => {
     expect(attemptTimes.at(-1)).toBe(startedAt + 58_000);
     expect(request).toHaveBeenNthCalledWith(
       1,
-      "chat.metadata",
-      { agentId: "main" },
+      "models.list",
+      { view: "configured", agentId: "main" },
       {
         signal: expect.any(AbortSignal),
         timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       },
     );
     expect(request).toHaveBeenLastCalledWith(
-      "chat.metadata",
-      { agentId: "main" },
+      "models.list",
+      { view: "configured", agentId: "main" },
       {
         signal: expect.any(AbortSignal),
         timeoutMs: 2_000,

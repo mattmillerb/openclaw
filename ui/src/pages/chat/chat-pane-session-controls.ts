@@ -8,6 +8,7 @@ import {
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 
@@ -55,6 +56,19 @@ export function renderChatPaneComposerControls(params: {
         gatewayAvailable: Boolean(state.client),
         loading: state.chatLoading,
         modelCatalog: state.chatModelCatalog,
+        modelCatalogState: {
+          hasSnapshot: state.chatModelCatalog.length > 0,
+          ...(state.chatModelCatalogError
+            ? { onRetry: () => void refreshChatMetadata(state, { refreshModelCatalog: true }) }
+            : {}),
+          status: state.chatModelCatalogError
+            ? "error"
+            : state.chatModelsLoading
+              ? state.chatModelCatalog.length > 0
+                ? "refreshing"
+                : "loading"
+              : "ready",
+        },
         modelOverrides: state.sessions.state.modelOverrides,
         modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
         modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,

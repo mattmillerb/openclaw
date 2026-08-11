@@ -47,6 +47,7 @@ import {
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
+import { loadModels } from "./models.ts";
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -271,7 +272,9 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+        modelCatalog
+          ? Promise.resolve(modelCatalog)
+          : loadModelCatalog(client, selectedAgentListScope(sessionKey, context)),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -306,7 +309,9 @@ async function executeModel(
     const requestedModel = args.trim();
     const resolvedModelCatalog = modelCatalog
       ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, { allowFailure: true });
+      : loadModelCatalog(client, selectedAgentListScope(sessionKey, context), {
+          allowFailure: true,
+        });
     let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
@@ -778,7 +783,9 @@ async function loadThinkingCommandState(
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+    modelCatalog
+      ? Promise.resolve(modelCatalog)
+      : loadModelCatalog(client, selectedAgentListScope(sessionKey, context)),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
@@ -789,13 +796,11 @@ async function loadThinkingCommandState(
 
 async function loadModelCatalog(
   client: GatewayBrowserClient,
+  scope: { agentId?: string },
   opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
   try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-    });
-    return result?.models ?? [];
+    return await loadModels(client, scope);
   } catch (err) {
     if (opts?.allowFailure) {
       return [];

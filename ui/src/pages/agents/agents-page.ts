@@ -46,6 +46,7 @@ import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { loadModels } from "../chat/models.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
 import {
   resetIdentityDraft,
@@ -574,13 +575,9 @@ class AgentsPage
     const request = { client, generation, agentId };
     this.chatModelCatalogRequest = request;
     this.chatModelCatalogError = null;
-    // Only chat metadata projects the selected agent's private provider/auth
-    // scope; models.list always resolves against the default agent.
-    void client
-      .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId })
-      .then((result) => {
+    void loadModels(client, { agentId, refresh: true })
+      .then((models) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
-          const models = result.models ?? [];
           this.chatModelCatalog = models;
           this.chatModelCatalogClient = client;
           this.chatModelCatalogAgentId = agentId;

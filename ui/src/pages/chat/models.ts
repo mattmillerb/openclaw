@@ -23,7 +23,12 @@ function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCa
 
 export async function loadModels(
   client: GatewayBrowserClient,
-  opts?: { agentId?: string; refresh?: boolean },
+  opts?: {
+    agentId?: string;
+    refresh?: boolean;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  },
 ): Promise<ModelCatalogEntry[]> {
   const cache = modelCatalogCacheFor(client);
   const cacheKey = opts?.agentId?.trim() ?? "";
@@ -39,20 +44,20 @@ export async function loadModels(
   // The cache write happens here, gated on inFlight identity: a refresh call
   // replaces inFlight, so an older request resolving late cannot clobber the
   // fresher result with pre-mutation catalog data.
-  const inFlight: Promise<ModelCatalogEntry[]> = requestModels(
-    client,
-    cached?.models,
-    cacheKey || undefined,
-  )
-    .then((result) => {
+  const inFlight: Promise<ModelCatalogEntry[]> = requestModels(client, {
+    ...(cacheKey ? { agentId: cacheKey } : {}),
+    ...(opts?.signal ? { signal: opts.signal } : {}),
+    ...(opts?.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+  })
+    .then((models) => {
       const latest = cache.get(cacheKey);
       if (!latest || latest.inFlight === inFlight) {
         cache.set(cacheKey, {
-          expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
-          models: result.models,
+          expiresAt: Date.now() + MODEL_CATALOG_CACHE_TTL_MS,
+          models,
         });
       }
-      return result.models;
+      return models;
     })
     .finally(() => {
       const latest = cache.get(cacheKey);
@@ -77,17 +82,21 @@ export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | 
 
 async function requestModels(
   client: GatewayBrowserClient,
-  fallback: ModelCatalogEntry[] | undefined,
-  agentId: string | undefined,
-): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-      ...(agentId ? { agentId } : {}),
-    });
-    return { models: result?.models ?? [], fresh: true };
-  } catch {
-    // Failed loads fall back without extending the TTL so the next call retries.
-    return { models: fallback ?? [], fresh: false };
-  }
+  opts: { agentId?: string; signal?: AbortSignal; timeoutMs?: number },
+): Promise<ModelCatalogEntry[]> {
+  const requestOptions =
+    opts.signal || opts.timeoutMs
+      ? {
+          ...(opts.signal ? { signal: opts.signal } : {}),
+          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+        }
+      : undefined;
+  const params = {
+    view: "configured" as const,
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+  };
+  const result = requestOptions
+    ? await client.request<{ models: ModelCatalogEntry[] }>("models.list", params, requestOptions)
+    : await client.request<{ models: ModelCatalogEntry[] }>("models.list", params);
+  return result?.models ?? [];
 }

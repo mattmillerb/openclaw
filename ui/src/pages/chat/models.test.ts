@@ -82,6 +82,16 @@ describe("loadModels", () => {
     expect(await loadModels(client)).toEqual(fresh);
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it("surfaces the first discovery failure instead of turning it into an empty catalog", async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new Error("live model discovery failed");
+      }),
+    } as unknown as GatewayBrowserClient;
+
+    await expect(loadModels(client)).rejects.toThrow("live model discovery failed");
+  });
 });
 
 describe("applyModelCatalogResult", () => {

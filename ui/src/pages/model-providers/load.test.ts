@@ -28,6 +28,11 @@ describe("loadModelProvidersData", () => {
       refresh: true,
       agentId: "writer",
     });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "all",
+      includeProviderCapabilities: true,
+      agentId: "writer",
+    });
     expect(request).toHaveBeenCalledWith("usage.status");
     const sessionUsageCall = request.mock.calls.find(([method]) => method === "sessions.usage");
     expect(sessionUsageCall?.[1]).not.toHaveProperty("agentId");
