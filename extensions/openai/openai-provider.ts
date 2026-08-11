@@ -280,7 +280,6 @@ function scopeOpenAICatalogOutcome(
   };
 }
 
-type OpenAICatalogContext = Parameters<NonNullable<ProviderPlugin["catalog"]>["run"]>[0];
 function mergeOpenAIProfileCatalogs(catalogs: readonly OpenAILiveProviderCatalog[]) {
   const first = catalogs[0];
   if (!first) {
