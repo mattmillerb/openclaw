@@ -11,7 +11,7 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
-export type ProviderCatalogAuthResolution = {
+type ProviderCatalogAuthResolution = {
   apiKey: string | undefined;
   discoveryApiKey?: string;
   mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";

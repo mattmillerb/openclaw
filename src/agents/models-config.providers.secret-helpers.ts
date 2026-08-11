@@ -210,7 +210,7 @@ export function resolveApiKeyFromCredential(
 }
 
 /** Lists auth profile ids whose provider aliases match the requested provider. */
-export function listAuthProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
+function listAuthProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
   const providerKey = resolveProviderIdForAuth(provider);
   return Object.entries(store.profiles)
     .filter(([, cred]) => resolveProviderIdForAuth(cred.provider) === providerKey)
