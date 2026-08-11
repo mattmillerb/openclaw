@@ -72,6 +72,10 @@ of these together:
 
 Any other combination — including a partially set one — keeps the native path.
 
+The Mac must also opt in locally with **Settings > Voice Wake > Use realtime Gateway relay**.
+This preference defaults off and stays on that Mac; Gateway config alone never activates the
+streamed path.
+
 The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
 `talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
 Talk runtime returns before startup and the native path is the only one available.
