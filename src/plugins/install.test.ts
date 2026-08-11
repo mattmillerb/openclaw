@@ -300,6 +300,7 @@ async function installFromDirWithWarnings(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   dangerouslyForceUnsafeInstall?: boolean;
+  onInstallPolicyWarning?: InstallPluginFromDirParams["onInstallPolicyWarning"];
   trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
 }) {
@@ -311,6 +312,7 @@ async function installFromDirWithWarnings(params: {
     extensionsDir: params.extensionsDir,
     config: params.config,
     mode: params.mode,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     logger: {
       info: () => {},
       warn: (msg: string) => warnings.push(msg),
@@ -382,6 +384,39 @@ process.stdin.on("end", () => {
     decision: "block",
     reason: "npm installs are disabled by policy",
   }));
+});
+`,
+    "utf-8",
+  );
+  fs.chmodSync(scriptPath, 0o700);
+  return { scriptPath, logPath };
+}
+
+function writePackageWarningInstallPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
+  const scriptPath = path.join(dir, "warn-package-policy.cjs");
+  const logPath = path.join(dir, "policy-requests.jsonl");
+  fs.writeFileSync(
+    scriptPath,
+    `#!${process.execPath}
+const fs = require("node:fs");
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.OPENCLAW_POLICY_LOG, input + "\\n");
+  const request = JSON.parse(input);
+  process.stdout.write(JSON.stringify(request.plugin?.contentType === "package"
+    ? {
+        protocolVersion: 1,
+        decision: "warn",
+        reason: "review package policy",
+        findings: [{ ruleId: "review-package", severity: "warn", message: "Review package" }],
+      }
+    : { protocolVersion: 1, decision: "allow" }));
 });
 `,
     "utf-8",
@@ -1920,6 +1955,48 @@ describe("installPluginFromArchive", () => {
     expect(requests.map((request) => request.source?.kind)).toEqual(["local-path", "local-path"]);
     expect(requests[0]?.request.requestedSpecifier).toBe(pluginDir);
     expect(requests[1]?.request.requestedSpecifier).toBe(pluginDir);
+  });
+
+  it("commits only after an install-policy warning is acknowledged and freshly re-evaluated", async () => {
+    const { tmpDir, pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const { scriptPath, logPath } = writePackageWarningInstallPolicyScript(tmpDir);
+    writeMinimalPackagePlugin(pluginDir, "policy-warning-plugin");
+    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+
+    const { result } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      onInstallPolicyWarning,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
+    expect(
+      readCapturedInstallPolicyRequests(logPath).map((request) => request.plugin?.contentType),
+    ).toEqual(["package", "package", "dependency-tree"]);
+    expect(fs.existsSync(path.join(extensionsDir, "policy-warning-plugin", "index.js"))).toBe(true);
+  });
+
+  it("fails closed before commit when an install-policy warning has no acknowledgement owner", async () => {
+    const { tmpDir, pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const { scriptPath, logPath } = writePackageWarningInstallPolicyScript(tmpDir);
+    writeMinimalPackagePlugin(pluginDir, "policy-warning-blocked-plugin");
+
+    const { result } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+    expect(readCapturedInstallPolicyRequests(logPath)).toHaveLength(1);
+    expect(
+      fs.existsSync(path.join(extensionsDir, "policy-warning-blocked-plugin", "index.js")),
+    ).toBe(false);
   });
 
   it("blocks plugin install when before_install rejects the staged source", async () => {
