@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -17,13 +18,14 @@ import {
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
-  listAuthProfilesForProvider,
   normalizeApiKeyConfig,
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
   resolveEnvApiKeyVarName,
   toDiscoveryApiKey,
   type ProviderApiKeyResolver,
+  type ProviderAuthProfilesResolver,
+  type ProviderAuthResolution,
   type ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -31,6 +33,8 @@ import type { AuthStorageData } from "./sessions/index.js";
 
 export type {
   ProviderApiKeyResolver,
+  ProviderAuthProfilesResolver,
+  ProviderAuthResolution,
   ProviderAuthResolver,
   ProviderConfig,
   SecretDefaults,
@@ -181,58 +185,52 @@ export function createProviderApiKeyResolver(
 }
 
 /** Create a resolver that reports provider auth mode and provenance. */
-export function createProviderAuthResolver(
+export function createProviderAuthProfilesResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
-): ProviderAuthResolver {
+): ProviderAuthProfilesResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
   return (provider: string, options?: { oauthMarker?: string }) => {
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
-    const ids = listAuthProfilesForProvider(authStore, authProvider);
-
-    let oauthCandidate:
-      | {
-          apiKey: string | undefined;
-          discoveryApiKey?: string;
-          mode: "oauth";
-          source: "profile";
-          profileId: string;
-        }
-      | undefined;
+    const ids = resolveAuthProfileOrder({
+      cfg: config,
+      store: authStore,
+      provider: authProvider,
+      readinessMode: "execution",
+    });
+    const candidates: ProviderAuthResolution[] = [];
     for (const id of ids) {
       const cred = authStore.profiles[id];
       if (!cred) {
         continue;
       }
       if (cred.type === "oauth") {
-        // Prefer concrete API-key profiles, but keep one OAuth profile as a
-        // fallback so provider routing can advertise OAuth-backed availability.
-        oauthCandidate ??= {
+        candidates.push({
           apiKey: options?.oauthMarker,
           discoveryApiKey: toDiscoveryApiKey(cred.access),
           mode: "oauth",
           source: "profile",
           profileId: id,
-        };
+        });
         continue;
       }
       const resolved = resolveApiKeyFromCredential(cred, env);
       if (!resolved) {
         continue;
       }
-      return {
+      candidates.push({
         apiKey: resolved.apiKey,
         discoveryApiKey: resolved.discoveryApiKey,
         mode: cred.type,
         source: "profile" as const,
         profileId: id,
-      };
+      });
     }
-    if (oauthCandidate) {
-      return oauthCandidate;
+    if (candidates.length > 0) {
+      return candidates;
     }
 
     const envVar = resolveEnvApiKeyVarName(authProvider, env, {
@@ -241,12 +239,14 @@ export function createProviderAuthResolver(
       authEvidenceMap: lookupCaches.authEvidenceMap,
     });
     if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: "api_key" as const,
-        source: "env" as const,
-      };
+      return [
+        {
+          apiKey: envVar,
+          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+          mode: "api_key" as const,
+          source: "env" as const,
+        },
+      ];
     }
 
     const fromConfig = resolveConfigBackedProviderAuth({
@@ -256,20 +256,39 @@ export function createProviderAuthResolver(
       authProvider,
     });
     if (fromConfig) {
-      return {
-        apiKey: fromConfig.apiKey,
-        discoveryApiKey: fromConfig.discoveryApiKey,
-        mode: fromConfig.mode,
-        source: "none",
-      };
+      return [
+        {
+          apiKey: fromConfig.apiKey,
+          discoveryApiKey: fromConfig.discoveryApiKey,
+          mode: fromConfig.mode,
+          source: "none",
+        },
+      ];
     }
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    };
+    return [
+      {
+        apiKey: undefined,
+        discoveryApiKey: undefined,
+        mode: "none" as const,
+        source: "none" as const,
+      },
+    ];
   };
+}
+
+/** Create the single-candidate compatibility resolver from the ordered candidate set. */
+export function createProviderAuthResolver(
+  env: NodeJS.ProcessEnv,
+  authStoreInput: AuthProfileStoreInput,
+  config?: OpenClawConfig,
+): ProviderAuthResolver {
+  const resolveProfiles = createProviderAuthProfilesResolver(env, authStoreInput, config);
+  return (provider, options) =>
+    resolveProfiles(provider, options)[0] ?? {
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    };
 }
 
 function resolveConfigBackedProviderAuth(params: {

@@ -11,6 +11,14 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
+export type ProviderCatalogAuthResolution = {
+  apiKey: string | undefined;
+  discoveryApiKey?: string;
+  mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
+  source: "env" | "profile" | "none";
+  profileId?: string;
+};
+
 export type ProviderCatalogContext = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -32,6 +40,11 @@ export type ProviderCatalogContext = {
     source: "env" | "profile" | "none";
     profileId?: string;
   };
+  /** Runtime-ordered auth candidates for profile-aware live discovery. */
+  resolveProviderAuthProfiles: (
+    providerId?: string,
+    options?: { oauthMarker?: string },
+  ) => ProviderCatalogAuthResolution[];
 };
 
 export type ProviderCatalogResult =

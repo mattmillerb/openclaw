@@ -8,7 +8,7 @@ import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
 } from "./provider-catalog-result.js";
-import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -164,6 +164,7 @@ export async function runProviderCatalog(params: {
     source: "env" | "profile" | "none";
     profileId?: string;
   };
+  resolveProviderAuthProfiles?: ProviderCatalogContext["resolveProviderAuthProfiles"];
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 }) {
   const hook = resolveProviderCatalogHook(params.provider);
@@ -177,6 +178,9 @@ export async function runProviderCatalog(params: {
     env: params.env,
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
+    resolveProviderAuthProfiles:
+      params.resolveProviderAuthProfiles ??
+      ((providerId, options) => [params.resolveProviderAuth(providerId, options)]),
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     params.reportCatalogOutcome?.(outcome);
@@ -196,6 +200,7 @@ export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {
       mode: "none",
       source: "none",
     }),
+    resolveProviderAuthProfiles: () => [],
   });
 }
 

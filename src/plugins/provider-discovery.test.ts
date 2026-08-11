@@ -155,6 +155,7 @@ describe("runProviderCatalog", () => {
                 provider: "openai",
                 profileId: "openai:chatgpt",
                 status: "auth-rejected",
+                modelIds: [],
               },
             ],
           };
@@ -174,7 +175,12 @@ describe("runProviderCatalog", () => {
     });
 
     expect(outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        status: "auth-rejected",
+        modelIds: [],
+      },
     ]);
   });
 });
@@ -443,12 +449,14 @@ describe("runProviderStaticCatalog", () => {
         mode: "none";
         source: "none";
       };
+      resolveProviderAuthProfiles: () => [];
     };
     expect(sterileContext).toEqual({
       config: {},
       env: {},
       resolveProviderApiKey: sterileContext.resolveProviderApiKey,
       resolveProviderAuth: sterileContext.resolveProviderAuth,
+      resolveProviderAuthProfiles: sterileContext.resolveProviderAuthProfiles,
     });
     expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
     expect(sterileContext.resolveProviderAuth()).toEqual({
@@ -456,6 +464,7 @@ describe("runProviderStaticCatalog", () => {
       mode: "none",
       source: "none",
     });
+    expect(sterileContext.resolveProviderAuthProfiles()).toEqual([]);
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
   });

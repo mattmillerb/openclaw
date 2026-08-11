@@ -1184,8 +1184,88 @@ describe("buildOpenAIProvider", () => {
 
     expect(result.provider.models).toEqual([]);
     expect(result.outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        status: "auth-rejected",
+        modelIds: [],
+      },
     ]);
+  });
+
+  it("discovers every ordered OAuth profile and records which models each profile authorizes", async () => {
+    mocks.resolveApiKeyForProvider.mockImplementation(async ({ profileId }) => ({
+      mode: "oauth",
+      apiKey: `token-${profileId}`,
+      source: `profile:${profileId}`,
+      profileId,
+    }));
+    mocks.resolveProviderAuthProfileMetadata.mockImplementation(({ profileId }) => ({
+      profileId,
+      accountId: `account-${profileId}`,
+    }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      const authorization = headers.get("Authorization");
+      if (authorization === "Bearer token-openai:rejected") {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return Response.json({
+        models: [{ slug: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", visibility: "list" }],
+      });
+    });
+    const provider = buildOpenAIProvider();
+
+    try {
+      const result = await provider.catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "oauth",
+          apiKey: "token-openai:rejected",
+          source: "profile",
+          profileId: "openai:rejected",
+        }),
+        resolveProviderAuthProfiles: () => [
+          {
+            mode: "oauth",
+            apiKey: "token-openai:rejected",
+            source: "profile",
+            profileId: "openai:rejected",
+          },
+          {
+            mode: "oauth",
+            apiKey: "token-openai:ready",
+            source: "profile",
+            profileId: "openai:ready",
+          },
+        ],
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        config: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI live provider catalog");
+      }
+      expect(result.providers.openai?.models.map((model) => model.id)).toEqual(["gpt-5.6-terra"]);
+      expect(result.outcomes).toEqual([
+        {
+          provider: "openai",
+          profileId: "openai:rejected",
+          status: "auth-rejected",
+          modelIds: [],
+        },
+        {
+          provider: "openai",
+          profileId: "openai:ready",
+          status: "ready",
+          modelIds: ["gpt-5.6-terra"],
+        },
+      ]);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(

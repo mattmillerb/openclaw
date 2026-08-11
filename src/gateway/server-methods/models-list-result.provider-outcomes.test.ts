@@ -170,4 +170,62 @@ describe("models.list provider catalog outcomes", () => {
       selectedProfileId: "openai:accepted",
     });
   });
+
+  it("uses the profile whose live catalog authorized the model", async () => {
+    const config = {} as OpenClawConfig;
+    const model = {
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      provider: "openai",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg: config,
+      agentId: "main",
+      snapshot: {
+        entries: [model],
+        routeVariants: [model],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "openai:first",
+            status: "ready",
+            modelIds: ["gpt-5.6-sol"],
+          },
+          {
+            provider: "openai",
+            profileId: "openai:second",
+            status: "ready",
+            modelIds: ["gpt-5.6-terra"],
+          },
+        ],
+      },
+      preferredProfileId: "openai:first",
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:first": {
+            type: "oauth",
+            provider: "openai",
+            access: "first-access-token",
+            refresh: "first-refresh-token",
+            expires: Date.now() + 30 * 60_000,
+          },
+          "openai:second": {
+            type: "oauth",
+            provider: "openai",
+            access: "second-access-token",
+            refresh: "second-refresh-token",
+            expires: Date.now() + 30 * 60_000,
+          },
+        },
+      },
+    });
+
+    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
+      availability: true,
+      selectedProfileId: "openai:second",
+    });
+  });
 });

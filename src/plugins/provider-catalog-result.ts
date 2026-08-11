@@ -85,6 +85,9 @@ export function copyProviderCatalogOutcomes(
     }
     const provider = readRecordValue(entry, "provider");
     const profileId = readRecordValue(entry, "profileId");
+    const modelIds = copyArrayEntries(readRecordValue(entry, "modelIds")).flatMap((modelId) =>
+      typeof modelId === "string" && modelId.trim() ? [modelId.trim()] : [],
+    );
     const status = readRecordValue(entry, "status");
     if (
       typeof provider !== "string" ||
@@ -101,6 +104,7 @@ export function copyProviderCatalogOutcomes(
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(Array.isArray(readRecordValue(entry, "modelIds")) ? { modelIds } : {}),
       },
     ];
   });

@@ -50,6 +50,7 @@ let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LO
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
+let createProviderAuthProfilesResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthProfilesResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
 >;
@@ -77,6 +78,7 @@ async function loadProviderAuthModules() {
   resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
+  createProviderAuthProfilesResolver = secretsModule.createProviderAuthProfilesResolver;
 }
 
 beforeEach(() => {
@@ -177,6 +179,25 @@ describe("models-config provider auth provenance", () => {
       source: "profile",
       profileId: "openai:default",
     });
+  });
+
+  it("returns every provider profile in the same explicit order runtime selection uses", () => {
+    const profiles = createProviderAuthProfilesResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {
+          "openai:first": { type: "api_key", provider: "openai", key: "sk-first" },
+          "openai:second": { type: "api_key", provider: "openai", key: "sk-second" },
+        },
+      },
+      { auth: { order: { openai: ["openai:second", "openai:first"] } } },
+    );
+
+    expect(profiles("openai").map((profile) => profile.profileId)).toEqual([
+      "openai:second",
+      "openai:first",
+    ]);
   });
 
   it("resolves plugin-owned synthetic auth through the provider hook", () => {

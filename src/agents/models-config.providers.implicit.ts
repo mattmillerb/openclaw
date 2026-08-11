@@ -33,11 +33,13 @@ import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.
 import { mergeProviderModels } from "./models-config.merge.js";
 import type {
   ProviderApiKeyResolver,
+  ProviderAuthProfilesResolver,
   ProviderAuthResolver,
   ProviderConfig,
 } from "./models-config.providers.secrets.js";
 import {
   createProviderApiKeyResolver,
+  createProviderAuthProfilesResolver,
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
@@ -77,6 +79,7 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
+  resolveProviderAuthProfiles: ProviderAuthProfilesResolver;
 };
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
@@ -440,6 +443,8 @@ async function resolvePluginImplicitProviders(
         resolveProviderApiKey: resolveCatalogProviderApiKey,
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        resolveProviderAuthProfiles: (providerId, options) =>
+          ctx.resolveProviderAuthProfiles(providerId?.trim() || provider.id, options),
         reportCatalogOutcome: ctx.onProviderCatalogOutcome,
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
@@ -628,6 +633,11 @@ export async function resolveImplicitProviders(
     env,
     resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
     resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderAuthProfiles: createProviderAuthProfilesResolver(
+      env,
+      getAuthStore,
+      discoveryAuthConfig,
+    ),
   };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(

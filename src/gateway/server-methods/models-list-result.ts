@@ -76,6 +76,14 @@ type ModelsListResult = {
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 };
 
+function projectProviderCatalogOutcomes(outcomes: readonly ProviderCatalogOutcome[] | undefined) {
+  return outcomes?.map(({ provider, profileId, status }) => ({
+    provider,
+    ...(profileId ? { profileId } : {}),
+    status,
+  }));
+}
+
 let loggedSlowModelsListCatalog = false;
 
 // Unknown views are rejected by protocol validation first; this helper keeps the
@@ -176,15 +184,19 @@ function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then(() => {
-      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
-        modelId: identity?.id ?? entry.id,
-        ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-        ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
-        observedRoutes: routeVariants.map((variant) => ({
-          api: variant.api,
-          baseUrl: variant.baseUrl,
-        })),
-      });
+      const evaluateForProfile = (lockedProfileId?: string) =>
+        params.authResolver.evaluateModelAuth(entry.provider, {
+          modelId: identity?.id ?? entry.id,
+          ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
+          ...((lockedProfileId ?? params.lockedProfileId)
+            ? { lockedProfileId: lockedProfileId ?? params.lockedProfileId }
+            : {}),
+          observedRoutes: routeVariants.map((variant) => ({
+            api: variant.api,
+            baseUrl: variant.baseUrl,
+          })),
+        });
+      const evaluation = evaluateForProfile();
       const resolved =
         evaluation.routeResolution === null && normalizeProviderId(entry.provider) !== "openai"
           ? {
@@ -199,12 +211,34 @@ function createModelsListEntryEvaluator(params: {
             }
           : evaluation;
       const provider = normalizeProviderId(entry.provider);
+      const outcomes =
+        params.providerOutcomes?.filter(
+          (outcome) => normalizeProviderId(outcome.provider) === provider,
+        ) ?? [];
+      const modelId = (identity?.id ?? entry.id).trim().toLowerCase();
+      const authorizingProfiles = outcomes.filter(
+        (outcome) =>
+          outcome.status === "ready" &&
+          outcome.profileId !== undefined &&
+          outcome.modelIds?.some((candidate) => candidate.trim().toLowerCase() === modelId),
+      );
+      if (
+        authorizingProfiles.length > 0 &&
+        !authorizingProfiles.some((outcome) => outcome.profileId === resolved.selectedProfileId)
+      ) {
+        for (const outcome of authorizingProfiles) {
+          const candidate = evaluateForProfile(outcome.profileId);
+          if (candidate.availability === true) {
+            return candidate;
+          }
+        }
+        return { ...resolved, availability: false };
+      }
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
       // profile discovery tested; widening it would hide routes backed by another valid profile.
-      return params.providerOutcomes?.some(
+      return outcomes.some(
         (outcome) =>
           outcome.status === "auth-rejected" &&
-          normalizeProviderId(outcome.provider) === provider &&
           (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
       )
         ? { ...resolved, availability: false }
@@ -618,7 +652,10 @@ export async function buildModelsListResult(
   const catalog = snapshot.entries;
   const routeVariants = snapshot.routeVariants;
   const providerOutcomes = snapshot.providerOutcomes;
-  const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
+  const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
+  const outcomeProjection = publicProviderOutcomes?.length
+    ? { providerOutcomes: publicProviderOutcomes }
+    : {};
   const metadataSnapshot =
     (usedPreloadedCatalog ? params.catalogProjector?.metadataSnapshot : undefined) ??
     getCurrentPluginMetadataSnapshot({

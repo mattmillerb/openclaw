@@ -48,16 +48,24 @@ export type ProviderApiKeyResolver = (provider: string) => {
 };
 
 /** Resolves full provider auth state for callers that need mode and profile provenance. */
-export type ProviderAuthResolver = (
-  provider: string,
-  options?: { oauthMarker?: string },
-) => {
+export type ProviderAuthResolution = {
   apiKey: string | undefined;
   discoveryApiKey?: string;
   mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
   source: "env" | "profile" | "none";
   profileId?: string;
 };
+
+export type ProviderAuthResolver = (
+  provider: string,
+  options?: { oauthMarker?: string },
+) => ProviderAuthResolution;
+
+/** Resolves every runtime-ordered auth candidate for profile-aware discovery. */
+export type ProviderAuthProfilesResolver = (
+  provider: string,
+  options?: { oauthMarker?: string },
+) => ProviderAuthResolution[];
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
