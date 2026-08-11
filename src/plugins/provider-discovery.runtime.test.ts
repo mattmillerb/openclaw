@@ -695,7 +695,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-        resolveProviderAuthProfiles: () => [],
       }),
     ).resolves.toEqual({
       providers: {
@@ -791,7 +790,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-        resolveProviderAuthProfiles: () => [],
       }),
     ).resolves.toEqual({
       providers: {

@@ -41,7 +41,7 @@ export type ProviderCatalogContext = {
     profileId?: string;
   };
   /** Runtime-ordered auth candidates for profile-aware live discovery. */
-  resolveProviderAuthProfiles: (
+  resolveProviderAuthProfiles?: (
     providerId?: string,
     options?: { oauthMarker?: string },
   ) => ProviderCatalogAuthResolution[];

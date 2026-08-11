@@ -33,7 +33,6 @@ function createCatalogContext(params: {
       mode: providerId && params.apiKeys?.[providerId] ? "api_key" : "none",
       source: providerId && params.apiKeys?.[providerId] ? "env" : "none",
     }),
-    resolveProviderAuthProfiles: () => [],
   };
 }
 

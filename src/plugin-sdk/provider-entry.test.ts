@@ -64,7 +64,6 @@ function createCatalogContext(
       mode: "api_key",
       source: "env",
     }),
-    resolveProviderAuthProfiles: () => [],
   };
 }
 
