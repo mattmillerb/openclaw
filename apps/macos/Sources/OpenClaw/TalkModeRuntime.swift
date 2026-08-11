@@ -22,13 +22,24 @@ actor TalkModeRuntime {
         case fallback
     }
 
+    typealias StartDependencies = (
+        realtime: @Sendable (Int) async throws -> Void,
+        projectFallback: @Sendable () async -> Void,
+        fallback: @Sendable (Int) async -> Void)
+
+    private struct NativeFallbackOwner {
+        let lifecycleGeneration: Int
+        let recognitionGeneration: Int
+        let realtimeRelayGeneration: UInt64
+    }
+
     let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
-    private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
-    private static let defaultModelIdFallback = "eleven_v3"
-    private static let defaultTalkProvider = "elevenlabs"
-    private static let mlxTalkProvider = "mlx"
-    private static let systemTalkProvider = "system"
-    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
+    static let defaultModelIdFallback = "eleven_v3"
+    static let defaultTalkProvider = "elevenlabs"
+    static let mlxTalkProvider = "mlx"
+    static let systemTalkProvider = "system"
+    static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -54,7 +65,7 @@ actor TalkModeRuntime {
     private var activeInputResolution: AudioInputDeviceResolution?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var recognitionGeneration: Int = 0
+    var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
 
@@ -95,6 +106,7 @@ actor TalkModeRuntime {
     var realtimeRelayStartGeneration: UInt64?
     var realtimeRestartGeneration: UInt64 = 0
     var realtimeRestartTask: Task<Void, Never>?
+    var startDependencies: StartDependencies?
     private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
@@ -109,9 +121,20 @@ actor TalkModeRuntime {
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
 
-    static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
+    #if DEBUG
+    func _test_prepareRealtimeStop(
+        session: RealtimeTalkRelaySession,
+        phase: TalkModePhase)
+    {
+        self.realtimeSession = session
+        self.phase = phase
+        self.isPaused = false
     }
+
+    func _test_realtimeStopPhase() -> TalkModePhase {
+        self.phase
+    }
+    #endif
 
     // MARK: - Lifecycle
 
@@ -171,12 +194,14 @@ actor TalkModeRuntime {
             self.lastHeard = nil
             self.lastSpeechEnergyAt = nil
             await MainActor.run { TalkModeController.shared.updatePartialTranscript("") }
-            await self.stopRecognition()
+            self.stopRecognition()
             return
         }
 
         if self.phase == .idle || self.phase == .listening {
-            await self.startRecognition()
+            let lifecycleGeneration = self.lifecycleGeneration
+            guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration),
+                  self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
             self.phase = .listening
             await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             self.startSilenceMonitor()
@@ -194,15 +219,27 @@ actor TalkModeRuntime {
         generation == self.lifecycleGeneration && self.isEnabled
     }
 
+    private func canOwnNativeFallback(_ owner: NativeFallbackOwner) -> Bool {
+        self.isCurrent(owner.lifecycleGeneration) &&
+            !self.isPaused &&
+            self.recognitionGeneration == owner.recognitionGeneration &&
+            self.realtimeRelayGeneration == owner.realtimeRelayGeneration &&
+            self.realtimeRelayStartGeneration == nil &&
+            self.realtimeSession == nil
+    }
+
     func start() async {
         let gen = self.lifecycleGeneration
         guard voiceWakeSupported else { return }
 
-        guard await PermissionManager.ensureVoiceWakePermissions(interactive: true) else {
-            self.logger.error("talk runtime not starting: permissions missing")
-            return
+        let startDependencies = self.startDependencies
+        if startDependencies == nil {
+            guard await PermissionManager.ensureVoiceWakePermissions(interactive: true) else {
+                self.logger.error("talk runtime not starting: permissions missing")
+                return
+            }
+            await reloadConfig()
         }
-        await reloadConfig()
         guard self.isCurrent(gen) else { return }
         if self.isPaused {
             self.phase = .idle
@@ -215,22 +252,42 @@ actor TalkModeRuntime {
         let bypassRealtime = self.bypassRealtimeOnNextStart
         self.bypassRealtimeOnNextStart = false
         if self.shouldAttemptRealtimeRelay(), !bypassRealtime {
+            let fallbackOwner = NativeFallbackOwner(
+                lifecycleGeneration: gen,
+                recognitionGeneration: self.recognitionGeneration,
+                realtimeRelayGeneration: self.realtimeRelayGeneration &+ 1)
             do {
-                try await self.startRealtimeRelay(generation: gen)
+                if let startDependencies {
+                    try await startDependencies.realtime(gen)
+                } else {
+                    try await self.startRealtimeRelay(generation: gen)
+                }
                 return
             } catch is CancellationError {
                 return
             } catch {
+                guard self.canOwnNativeFallback(fallbackOwner) else { return }
                 self.logger.error(
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")
-                await MainActor.run {
-                    TalkModeController.shared.updatePartialTranscript(
-                        "Realtime unavailable — using native speech")
+                if let startDependencies {
+                    await startDependencies.projectFallback()
+                } else {
+                    await MainActor.run {
+                        TalkModeController.shared.updatePartialTranscript(
+                            "Realtime unavailable — using native speech")
+                    }
                 }
+                // The UI projection crosses actors. A newer relay or recognition owner
+                // must keep the failed attempt from tearing down or replacing its capture.
+                guard self.canOwnNativeFallback(fallbackOwner) else { return }
             }
         }
-        await self.startNativeFallback(generation: gen)
+        if let startDependencies {
+            await startDependencies.fallback(gen)
+        } else {
+            await self.startNativeFallback(generation: gen)
+        }
     }
 
     private func stop() async {
@@ -256,7 +313,7 @@ actor TalkModeRuntime {
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
-        await self.stopRecognition()
+        self.stopRecognition()
         await MainActor.run {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updatePartialTranscript("")
@@ -264,10 +321,31 @@ actor TalkModeRuntime {
         }
     }
 
+    #if DEBUG
+    func _test_enableRealtimeRelaySelection() {
+        (self.macOSRealtimeRelayOptIn, self.hasGatewayRealtimeRelayTuple) = (true, true)
+    }
+
+    func _test_setStartDependencies(
+        startRealtimeRelay: @escaping @Sendable (Int) async throws -> Void,
+        projectNativeFallback: @escaping @Sendable () async -> Void = {},
+        startNativeFallback: @escaping @Sendable (Int) async -> Void)
+    {
+        self.startDependencies = (
+            realtime: startRealtimeRelay,
+            projectFallback: projectNativeFallback,
+            fallback: startNativeFallback)
+    }
+
+    func _test_beginRecognitionAttempt(lifecycleGeneration: Int) -> Int? {
+        self.beginRecognitionAttempt(lifecycleGeneration: lifecycleGeneration)
+    }
+    #endif
+
     private func startNativeFallback(generation: Int) async {
+        guard await self.startRecognition(lifecycleGeneration: generation),
+              self.isCurrent(generation), !self.isPaused else { return }
         self.startAudioInputObserver()
-        await self.startRecognition()
-        guard self.isCurrent(generation), !self.isPaused else { return }
         self.phase = .listening
         await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
         self.startSilenceMonitor()
@@ -293,7 +371,8 @@ actor TalkModeRuntime {
         }
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
         self.logger.info("talk input selection changed; restarting capture")
-        await self.startRecognition()
+        let lifecycleGeneration = self.lifecycleGeneration
+        _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
     }
 
     private func startAudioInputObserver() {
@@ -307,9 +386,10 @@ actor TalkModeRuntime {
 
     private func audioInputDevicesDidChange() async {
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
+        let lifecycleGeneration = self.lifecycleGeneration
         let availableUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
         guard let activeInputResolution else {
-            await self.startRecognition()
+            _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
             return
         }
         guard activeInputResolution.shouldRestart(
@@ -318,7 +398,7 @@ actor TalkModeRuntime {
         else { return }
 
         self.logger.warning("talk active/default input changed; restarting capture")
-        await self.startRecognition()
+        _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
     }
 
     private func shouldAttemptRealtimeRelay() -> Bool {
@@ -356,12 +436,13 @@ actor TalkModeRuntime {
         let generation: Int
     }
 
-    private func startRecognition() async {
-        await self.stopRecognition()
-        self.recognitionGeneration &+= 1
-        let generation = self.recognitionGeneration
+    private func startRecognition(lifecycleGeneration: Int) async -> Bool {
+        guard let recognitionAttempt = self.beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration)
+        else { return false }
 
         let voiceWakeLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let selectedInputUID = await MainActor.run { AppStateStore.shared.voiceWakeMicID }
         let supportedLocaleIDs = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
         let localeID = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
             preferredLocaleIDs: [
@@ -370,71 +451,103 @@ actor TalkModeRuntime {
                 Locale.autoupdatingCurrent.identifier,
             ],
             supportedLocaleIDs: supportedLocaleIDs)
-        self.recognizer = localeID
+        let recognizer = localeID
             .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
             ?? SFSpeechRecognizer()
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
-            return
+            return false
         }
         self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        Self.configureRecognitionRequest(request)
-        self.recognitionRequest = request
-
-        let selectedInputUID = await MainActor.run { AppStateStore.shared.voiceWakeMicID }
         let selection = AudioInputDeviceObserver.resolveSelection(selectedInputUID)
+        // Preparation above crosses MainActor. Hardware can become owned/running only
+        // after this lifecycle and recognition attempt are revalidated together.
+        guard self.canCommitRecognitionStart(
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionAttempt: recognitionAttempt) else { return false }
+
         // AVAudioEngine materializes inputNode from the system default before CurrentDevice can bind.
         // Without a usable default, accessing inputNode can SIGABRT even when another UID is alive.
         guard selection.resolvedUID != nil, AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            self.audioEngine = nil
-            self.activeInputResolution = nil
             self.logger.error("talk mode: no usable audio input device")
-            return
+            return false
         }
 
-        do {
-            try self.configureAudioEngine(
-                selection: selection,
-                request: request,
-                enableVoiceProcessing: true)
-        } catch {
-            self.logger.warning(
-                "talk processed input setup failed; retrying without voice processing: " +
-                    "\(error.localizedDescription, privacy: .public)")
-            self.discardAudioEngine()
-            do {
-                try self.configureAudioEngine(
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: {
+                self.canCommitRecognitionStart(
+                    lifecycleGeneration: lifecycleGeneration,
+                    recognitionAttempt: recognitionAttempt)
+            },
+            prepare: { enableVoiceProcessing in
+                try self.prepareStartedRecognitionCapture(
                     selection: selection,
-                    request: request,
-                    enableVoiceProcessing: false)
-            } catch {
-                self.discardAudioEngine()
-                self.logger.error(
-                    "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-                return
-            }
-        }
-
+                    enableVoiceProcessing: enableVoiceProcessing)
+            },
+            discard: { $0.discard() },
+            publish: { preparedCapture in
+                self.recognizer = recognizer
+                self.recognitionRequest = preparedCapture.request
+                self.audioEngine = preparedCapture.engine
+                self.activeInputResolution = preparedCapture.activeInputResolution
+                self.recognitionTask = recognizer.recognitionTask(
+                    with: preparedCapture.request,
+                    resultHandler: { [weak self, recognitionAttempt] result, error in
+                        guard let self else { return }
+                        let segments = result?.bestTranscription.segments ?? []
+                        let transcript = result?.bestTranscription.formattedString
+                        let update = RecognitionUpdate(
+                            transcript: transcript,
+                            hasConfidence: segments.contains { $0.confidence > 0.6 },
+                            isFinal: result?.isFinal ?? false,
+                            errorDescription: error?.localizedDescription,
+                            generation: recognitionAttempt)
+                        Task { await self.handleRecognition(update) }
+                    })
+            },
+            onFailure: { enableVoiceProcessing, error in
+                if enableVoiceProcessing {
+                    self.logger.warning(
+                        "talk processed input start failed; retrying without voice processing: " +
+                            "\(error.localizedDescription, privacy: .public)")
+                } else {
+                    self.logger.error(
+                        "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
+                }
+            })
+        guard started else { return false }
         self.startRMSTicker(meter: self.rmsMeter)
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
-            guard let self else { return }
-            let segments = result?.bestTranscription.segments ?? []
-            let transcript = result?.bestTranscription.formattedString
-            let update = RecognitionUpdate(
-                transcript: transcript,
-                hasConfidence: segments.contains { $0.confidence > 0.6 },
-                isFinal: result?.isFinal ?? false,
-                errorDescription: error?.localizedDescription,
-                generation: generation)
-            Task { await self.handleRecognition(update) }
-        }
+        return true
     }
 
-    private func stopRecognition() async {
+    private func beginRecognitionAttempt(lifecycleGeneration: Int) -> Int? {
+        guard self.isCurrent(lifecycleGeneration), !self.isPaused else { return nil }
         self.recognitionGeneration &+= 1
+        let recognitionAttempt = self.recognitionGeneration
+        self.discardRecognitionResources()
+        return recognitionAttempt
+    }
+
+    func canCommitRecognitionStart(lifecycleGeneration: Int, recognitionAttempt: Int) -> Bool {
+        self.isCurrent(lifecycleGeneration) && !self.isPaused && self.recognitionGeneration == recognitionAttempt
+    }
+
+    private func stopRecognition() {
+        self.recognitionGeneration &+= 1
+        self.discardRecognitionResources()
+    }
+
+    func discardRecognitionResources(
+        recognitionAttempt: Int? = nil,
+        audioEngine expectedAudioEngine: AVAudioEngine? = nil)
+    {
+        guard TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: self.recognitionGeneration,
+            expectedAttempt: recognitionAttempt,
+            currentEngineIdentifier: self.audioEngine.map(ObjectIdentifier.init),
+            expectedEngineIdentifier: expectedAudioEngine.map(ObjectIdentifier.init))
+        else { return }
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -545,7 +658,7 @@ actor TalkModeRuntime {
         if sendChime != .none {
             await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
         }
-        await self.stopRecognition()
+        self.stopRecognition()
         await sendAndSpeak(text)
     }
 
@@ -579,49 +692,55 @@ actor TalkModeRuntime {
         return selection
     }
 
-    private func configureAudioEngine(
+    private func prepareStartedRecognitionCapture(
         selection: AudioInputDeviceResolution,
-        request: SFSpeechAudioBufferRecognitionRequest,
-        enableVoiceProcessing: Bool) throws
+        enableVoiceProcessing: Bool)
+        throws -> PreparedRecognitionCapture
     {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        TalkRecognitionCaptureLifecycle.configure(request)
         let audioEngine = AVAudioEngine()
-        self.audioEngine = audioEngine
         let input = audioEngine.inputNode
-        if enableVoiceProcessing {
-            do {
+        var tapInstalled = false
+        do {
+            if enableVoiceProcessing {
                 try input.setVoiceProcessingEnabled(true)
-            } catch {
-                // Aggregate devices can reject voice processing; capture still works without it.
-                self.logger.warning(
-                    "talk voice processing unavailable: \(error.localizedDescription, privacy: .public)")
             }
-        }
 
-        let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
-        guard activeResolution.resolvedUID != nil else {
-            throw TalkAudioInputError.unavailable
-        }
+            let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
+            guard activeResolution.resolvedUID != nil else {
+                throw TalkAudioInputError.unavailable
+            }
 
-        let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0, format.sampleRate > 0 else {
-            throw TalkAudioInputError.invalidFormat
+            let format = input.outputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0 else {
+                throw TalkAudioInputError.invalidFormat
+            }
+            input.removeTap(onBus: 0)
+            let meter = self.rmsMeter
+            input.installTap(
+                onBus: 0,
+                bufferSize: 2048,
+                format: format)
+            { [weak request, meter] buffer, _ in
+                request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
+                meter.set(TalkAudioLevel.rms(buffer: buffer))
+            }
+            tapInstalled = true
+            audioEngine.prepare()
+            try audioEngine.start()
+            return PreparedRecognitionCapture(
+                request: request,
+                engine: audioEngine,
+                activeInputResolution: activeResolution)
+        } catch {
+            request.endAudio()
+            if tapInstalled {
+                input.removeTap(onBus: 0)
+            }
+            audioEngine.stop()
+            throw error
         }
-        input.removeTap(onBus: 0)
-        let meter = self.rmsMeter
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            meter.set(TalkAudioLevel.rms(buffer: buffer))
-        }
-        audioEngine.prepare()
-        try audioEngine.start()
-        self.activeInputResolution = activeResolution
-    }
-
-    private func discardAudioEngine() {
-        self.audioEngine?.inputNode.removeTap(onBus: 0)
-        self.audioEngine?.stop()
-        self.audioEngine = nil
-        self.activeInputResolution = nil
     }
 
     private func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
@@ -629,18 +748,6 @@ actor TalkModeRuntime {
             selectedUID: selection.selectedUID,
             resolvedUID: AudioInputDeviceObserver.resolveSelection(nil).resolvedUID,
             fellBackToSystemDefault: selection.selectedUID != nil)
-    }
-}
-
-private enum TalkAudioInputError: LocalizedError {
-    case unavailable
-    case invalidFormat
-
-    var errorDescription: String? {
-        switch self {
-        case .unavailable: "Selected input and system default are unavailable"
-        case .invalidFormat: "Selected audio input has no usable format"
-        }
     }
 }
 
@@ -711,8 +818,9 @@ extension TalkModeRuntime {
             guard let assistantText
             else {
                 self.logger.warning("talk assistant text missing after timeout")
+                guard await self.startRecognition(lifecycleGeneration: gen),
+                      self.isCurrent(gen), !self.isPaused else { return }
                 await self.startListening()
-                await self.startRecognition()
                 return
             }
             guard self.isCurrent(gen) else { return }
@@ -739,8 +847,10 @@ extension TalkModeRuntime {
             }
             return
         }
+        let lifecycleGeneration = self.lifecycleGeneration
+        guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration),
+              self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
         await self.startListening()
-        await self.startRecognition()
     }
 
     private func buildPrompt(transcript: String) -> String {
@@ -1241,8 +1351,8 @@ extension TalkModeRuntime {
     }
 
     private func prepareForPlayback(generation: Int) async -> Bool {
-        await self.startRecognition()
-        return self.isCurrent(generation)
+        guard await self.startRecognition(lifecycleGeneration: generation) else { return false }
+        return self.isCurrent(generation) && !self.isPaused
     }
 
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {
@@ -1338,119 +1448,6 @@ extension TalkModeRuntime {
 }
 
 extension TalkModeRuntime {
-    static func makeTalkSpeakParams(
-        text: String,
-        voiceId: String?,
-        modelId: String?,
-        outputFormat: String?,
-        directive: TalkDirective?) -> [String: AnyCodable]
-    {
-        var params: [String: AnyCodable] = ["text": AnyCodable(text)]
-
-        func addString(_ key: String, _ value: String?) {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmed.isEmpty else { return }
-            params[key] = AnyCodable(trimmed)
-        }
-
-        addString("voiceId", voiceId)
-        addString("modelId", directive?.modelId ?? modelId)
-        addString("outputFormat", directive?.outputFormat ?? outputFormat)
-        if let speed = directive?.speed {
-            params["speed"] = AnyCodable(speed)
-        }
-        if let rateWPM = directive?.rateWPM {
-            params["rateWpm"] = AnyCodable(rateWPM)
-        }
-        if let stability = directive?.stability {
-            params["stability"] = AnyCodable(stability)
-        }
-        if let similarity = directive?.similarity {
-            params["similarity"] = AnyCodable(similarity)
-        }
-        if let style = directive?.style {
-            params["style"] = AnyCodable(style)
-        }
-        if let speakerBoost = directive?.speakerBoost {
-            params["speakerBoost"] = AnyCodable(speakerBoost)
-        }
-        if let seed = directive?.seed {
-            params["seed"] = AnyCodable(seed)
-        }
-        addString("normalize", directive?.normalize)
-        addString("language", directive?.language)
-        if let latencyTier = directive?.latencyTier {
-            params["latencyTier"] = AnyCodable(latencyTier)
-        }
-
-        return params
-    }
-
-    // MARK: - Audio playback (MainActor helpers)
-
-    @MainActor
-    private func playPCM(
-        stream: AsyncThrowingStream<Data, Error>,
-        sampleRate: Double) async -> StreamingPlaybackResult
-    {
-        let metered = TalkModeController.shared.meteredSpeechStream(stream, sampleRate: sampleRate)
-        let result = await PCMStreamingAudioPlayer.shared.play(stream: metered, sampleRate: sampleRate)
-        TalkModeController.shared.endSpeechMetering()
-        return result
-    }
-
-    /// MP3 streaming has no metering hook; the wave falls back to its floor.
-    @MainActor
-    private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
-        await StreamingAudioPlayer.shared.play(stream: stream)
-    }
-
-    @MainActor
-    private func stopPCM() -> Double? {
-        PCMStreamingAudioPlayer.shared.stop()
-    }
-
-    @MainActor
-    private func stopMP3() -> Double? {
-        StreamingAudioPlayer.shared.stop()
-    }
-
-    @MainActor
-    private func playTalkAudio(data: Data) async -> StreamingPlaybackResult {
-        TalkBufferedAudioPlayer.shared.setLevelHandler { level in
-            TalkModeController.shared.updateSpeakingLevel(level)
-        }
-        return await TalkBufferedAudioPlayer.shared.play(data: data)
-    }
-
-    @MainActor
-    private func stopTalkAudio() -> Double? {
-        TalkBufferedAudioPlayer.shared.stop()
-    }
-
-    private func streamMLXVoice(
-        text: String,
-        modelRepo: String?,
-        language: String?,
-        voicePreset: String?,
-        referenceAudioPath: String?,
-        referenceText: String?,
-        stallTimeoutSeconds: Double) async throws -> MLXTTSPlaybackStream
-    {
-        try await TalkMLXSpeechSynthesizer.shared.synthesizeStream(
-            text: text,
-            modelRepo: modelRepo,
-            language: language,
-            voicePreset: voicePreset,
-            referenceAudioPath: referenceAudioPath,
-            referenceText: referenceText,
-            stallTimeoutSeconds: stallTimeoutSeconds)
-    }
-
-    private func stopMLXVoice() async {
-        await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
-    }
-
     // MARK: - Config
 
     private func reloadConfig() async {
@@ -1519,57 +1516,6 @@ extension TalkModeRuntime {
 
     static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
         TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
-    }
-
-    private func fetchTalkConfig() async -> TalkModeGatewayConfigState {
-        let env = ProcessInfo.processInfo.environment
-        let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sagVoice = env["SAG_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let envApiKey = env["ELEVENLABS_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        do {
-            let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .talkConfig,
-                params: ["includeSecrets": AnyCodable(true)],
-                timeoutMs: 8000)
-            let parsed = TalkModeGatewayConfigParser.parse(
-                snapshot: snap,
-                defaultProvider: Self.defaultTalkProvider,
-                defaultModelIdFallback: Self.defaultModelIdFallback,
-                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
-                envVoice: envVoice,
-                sagVoice: sagVoice,
-                envApiKey: envApiKey)
-            if parsed.missingResolvedPayload {
-                self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
-            }
-            await MainActor.run {
-                AppStateStore.shared.seamColorHex = parsed.seamColorHex
-            }
-            if parsed.activeProvider == Self.defaultTalkProvider {
-                self.ttsLogger.info("talk config provider from talk.resolved")
-            } else if parsed.activeProvider == Self.mlxTalkProvider ||
-                parsed.activeProvider == Self.systemTalkProvider
-            {
-                self.ttsLogger.info(
-                    "talk provider \(parsed.activeProvider, privacy: .public) active")
-            } else {
-                self.ttsLogger
-                    .info(
-                        """
-                        talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak \
-                        with system voice fallback
-                        """)
-            }
-            return parsed
-        } catch {
-            return TalkModeGatewayConfigParser.fallback(
-                defaultModelIdFallback: Self.defaultModelIdFallback,
-                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
-                envVoice: envVoice,
-                sagVoice: sagVoice,
-                envApiKey: envApiKey)
-        }
     }
 
     // MARK: - Audio level handling

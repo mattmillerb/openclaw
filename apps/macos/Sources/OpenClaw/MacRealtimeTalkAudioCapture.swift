@@ -1,5 +1,6 @@
 import AudioToolbox
 @preconcurrency import AVFoundation
+import CoreAudio
 import Foundation
 import OpenClawKit
 import OSLog
@@ -15,15 +16,17 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     private var audioInputObserver: AudioInputDeviceObserver?
+    private var audioOutputObserver: MacRealtimeTalkOutputRouteObserver?
     private var activeInputResolution: AudioInputDeviceResolution?
     private var targetSampleRate: Double?
     private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
     private var onFailure: (@MainActor (String) -> Void)?
-    private var voiceProcessingEnabled = false
     private var tapInstalled = false
+    private var suppressInputDuringOutput = false
+    private var outputRouteDecisionState = MacRealtimeTalkOutputRouteDecisionState()
 
     var suppressesInputDuringOutput: Bool {
-        !self.voiceProcessingEnabled
+        self.suppressInputDuringOutput
     }
 
     init(selectedInputUID: @escaping @MainActor () -> String? = {
@@ -49,6 +52,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.targetSampleRate = targetSampleRate
         self.onAudio = onAudio
         self.onFailure = onFailure
+        self.startOutputRouteObserver()
         do {
             try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
             self.startDeviceObserver()
@@ -64,6 +68,10 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.deliveryGate.deactivate()
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
+        self.audioOutputObserver?.stop()
+        self.audioOutputObserver = nil
+        self.suppressInputDuringOutput = false
+        self.outputRouteDecisionState.reset()
         self.teardownEngine()
         self.targetSampleRate = nil
         self.onAudio = nil
@@ -144,7 +152,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         engine.prepare()
         try engine.start()
         self.activeInputResolution = activeResolution
-        self.voiceProcessingEnabled = enableVoiceProcessing
     }
 
     private func bindSelectedInputIfNeeded(
@@ -197,6 +204,23 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.audioInputObserver = observer
     }
 
+    private func startOutputRouteObserver() {
+        let observer = MacRealtimeTalkOutputRouteObserver()
+        observer.start { [weak self] route in
+            Task { @MainActor [weak self] in
+                self?.updateOutputRoute(route)
+            }
+        }
+        self.audioOutputObserver = observer
+    }
+
+    private func updateOutputRoute(_ route: MacRealtimeTalkOutputRoute?) {
+        guard let decision = self.outputRouteDecisionState.update(route: route) else { return }
+        self.suppressInputDuringOutput = decision.suppressesInputDuringOutput
+        self.logger.info(
+            "realtime output route decision \(decision.redactedDescription, privacy: .public)")
+    }
+
     private func audioInputDevicesDidChange() {
         guard let targetSampleRate, let onAudio else { return }
         let desiredResolution = AudioInputDeviceObserver.resolveSelection(self.selectedInputUID())
@@ -233,9 +257,8 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.tapInstalled = false
         self.audioEngine?.stop()
         self.audioEngine = nil
-        self.inputNode = nil
+        inputNode = nil
         self.activeInputResolution = nil
-        self.voiceProcessingEnabled = false
     }
 
     #if DEBUG
@@ -247,6 +270,473 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.restartCaptureAfterInputChange { throw error }
     }
     #endif
+}
+
+struct MacRealtimeTalkOutputRoute: Equatable, Sendable {
+    let transportType: UInt32
+    let terminalTypes: [UInt32]
+    let selectedDataSource: MacRealtimeTalkOutputDataSource
+}
+
+enum MacRealtimeTalkOutputDataSource: Equatable, Sendable {
+    case unsupported
+    case failed
+    case selected(kinds: [UInt32])
+}
+
+enum MacRealtimeTalkOutputRouteDecisionReason: String, Sendable {
+    case routeUnavailable = "route-unavailable"
+    case dataSourceReadFailed = "data-source-read-failed"
+    case transportNotAllowlisted = "transport-not-allowlisted"
+    case outputKindUnavailable = "output-kind-unavailable"
+    case outputKindNotHeadphones = "output-kind-not-headphones"
+    case isolatedHeadphones = "isolated-headphones"
+}
+
+struct MacRealtimeTalkOutputRouteDecision: Equatable, Sendable {
+    let suppressesInputDuringOutput: Bool
+    let reason: MacRealtimeTalkOutputRouteDecisionReason
+    let transportType: UInt32?
+    let effectiveKinds: [UInt32]
+    let selectedDataSource: MacRealtimeTalkOutputDataSource?
+
+    var redactedDescription: String {
+        let transport = self.transportType.map(MacRealtimeTalkFourCC.describe) ?? "unavailable"
+        let kinds = MacRealtimeTalkFourCC.describe(self.effectiveKinds)
+        let source = switch self.selectedDataSource {
+        case .unsupported:
+            "unsupported"
+        case .failed:
+            "failed"
+        case let .selected(sourceKinds):
+            Self.selectedDataSourceTag(sourceKinds)
+        case nil:
+            "unavailable"
+        }
+        return "transport=\(transport) kinds=\(kinds) source=\(source) " +
+            "suppression=\(self.suppressesInputDuringOutput) reason=\(self.reason.rawValue)"
+    }
+
+    private static func selectedDataSourceTag(_ kinds: [UInt32]) -> String {
+        "selected:" + MacRealtimeTalkFourCC.describe(kinds)
+    }
+}
+
+enum MacRealtimeTalkOutputRoutePolicy {
+    static func decision(
+        for route: MacRealtimeTalkOutputRoute?) -> MacRealtimeTalkOutputRouteDecision
+    {
+        guard let route else {
+            return MacRealtimeTalkOutputRouteDecision(
+                suppressesInputDuringOutput: true,
+                reason: .routeUnavailable,
+                transportType: nil,
+                effectiveKinds: [],
+                selectedDataSource: nil)
+        }
+
+        if route.selectedDataSource == .failed {
+            return self.decision(
+                route: route,
+                effectiveKinds: [],
+                suppressesInput: true,
+                reason: .dataSourceReadFailed)
+        }
+
+        // The selected source is the active routing fact. Stream terminals are only a
+        // fallback for devices that expose no data-source property.
+        let effectiveKinds: [UInt32] = switch route.selectedDataSource {
+        case .unsupported:
+            route.terminalTypes.sorted()
+        case let .selected(kinds):
+            kinds.sorted()
+        case .failed:
+            []
+        }
+        let allowlistedTransports: Set<UInt32> = [
+            kAudioDeviceTransportTypeBuiltIn,
+            kAudioDeviceTransportTypeUSB,
+            kAudioDeviceTransportTypeBluetooth,
+            kAudioDeviceTransportTypeBluetoothLE,
+        ]
+        guard allowlistedTransports.contains(route.transportType) else {
+            return self.decision(
+                route: route,
+                effectiveKinds: effectiveKinds,
+                suppressesInput: true,
+                reason: .transportNotAllowlisted)
+        }
+
+        guard !effectiveKinds.isEmpty else {
+            return self.decision(
+                route: route,
+                effectiveKinds: [],
+                suppressesInput: true,
+                reason: .outputKindUnavailable)
+        }
+        guard effectiveKinds.allSatisfy({ $0 == kAudioStreamTerminalTypeHeadphones }) else {
+            return self.decision(
+                route: route,
+                effectiveKinds: effectiveKinds,
+                suppressesInput: true,
+                reason: .outputKindNotHeadphones)
+        }
+        return self.decision(
+            route: route,
+            effectiveKinds: effectiveKinds,
+            suppressesInput: false,
+            reason: .isolatedHeadphones)
+    }
+
+    private static func decision(
+        route: MacRealtimeTalkOutputRoute,
+        effectiveKinds: [UInt32],
+        suppressesInput: Bool,
+        reason: MacRealtimeTalkOutputRouteDecisionReason) -> MacRealtimeTalkOutputRouteDecision
+    {
+        let selectedDataSource = switch route.selectedDataSource {
+        case .unsupported:
+            MacRealtimeTalkOutputDataSource.unsupported
+        case .failed:
+            MacRealtimeTalkOutputDataSource.failed
+        case let .selected(kinds):
+            MacRealtimeTalkOutputDataSource.selected(kinds: kinds.sorted())
+        }
+        return MacRealtimeTalkOutputRouteDecision(
+            suppressesInputDuringOutput: suppressesInput,
+            reason: reason,
+            transportType: route.transportType,
+            effectiveKinds: effectiveKinds,
+            selectedDataSource: selectedDataSource)
+    }
+}
+
+struct MacRealtimeTalkOutputRouteDecisionState {
+    private(set) var current: MacRealtimeTalkOutputRouteDecision?
+
+    mutating func update(route: MacRealtimeTalkOutputRoute?) -> MacRealtimeTalkOutputRouteDecision? {
+        let next = MacRealtimeTalkOutputRoutePolicy.decision(for: route)
+        guard next != self.current else { return nil }
+        self.current = next
+        return next
+    }
+
+    mutating func reset() {
+        self.current = nil
+    }
+}
+
+private enum MacRealtimeTalkFourCC {
+    static func describe(_ values: [UInt32]) -> String {
+        "[" + values.map(self.describe).joined(separator: ",") + "]"
+    }
+
+    static func describe(_ value: UInt32) -> String {
+        let bytes = [
+            UInt8((value >> 24) & 0xFF),
+            UInt8((value >> 16) & 0xFF),
+            UInt8((value >> 8) & 0xFF),
+            UInt8(value & 0xFF),
+        ]
+        guard bytes.allSatisfy({ (0x20...0x7E).contains($0) }) else {
+            return String(format: "0x%08X", value)
+        }
+        return "'\(String(bytes: bytes, encoding: .ascii) ?? "????")'"
+    }
+}
+
+private struct MacRealtimeTalkAudioPropertyObservation {
+    let objectID: AudioObjectID
+    let address: AudioObjectPropertyAddress
+    let listener: AudioObjectPropertyListenerBlock
+
+    init?(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        listener: @escaping AudioObjectPropertyListenerBlock)
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectAddPropertyListenerBlock(
+            objectID,
+            &address,
+            DispatchQueue.main,
+            listener) == noErr
+        else { return nil }
+        self.objectID = objectID
+        self.address = address
+        self.listener = listener
+    }
+
+    func stop() {
+        var address = self.address
+        _ = AudioObjectRemovePropertyListenerBlock(
+            self.objectID,
+            &address,
+            DispatchQueue.main,
+            self.listener)
+    }
+}
+
+final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
+    private let logger = Logger(subsystem: "ai.openclaw", category: "talk.realtime.output-route")
+    private var defaultOutputObservation: MacRealtimeTalkAudioPropertyObservation?
+    private var dataSourceObservation: MacRealtimeTalkAudioPropertyObservation?
+    private var warningReported = false
+
+    func start(onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void) {
+        guard self.defaultOutputObservation == nil else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.bindCurrentOutput(onChange: onChange)
+        }
+        guard let observation = MacRealtimeTalkAudioPropertyObservation(
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            selector: kAudioHardwarePropertyDefaultOutputDevice,
+            scope: kAudioObjectPropertyScopeGlobal,
+            listener: listener)
+        else {
+            self.reportWarningOnce("default-output-listener-failed")
+            onChange(nil)
+            return
+        }
+        self.defaultOutputObservation = observation
+        self.bindCurrentOutput(onChange: onChange)
+    }
+
+    func stop() {
+        self.defaultOutputObservation?.stop()
+        self.defaultOutputObservation = nil
+        self.dataSourceObservation?.stop()
+        self.dataSourceObservation = nil
+    }
+
+    private func bindCurrentOutput(
+        onChange: @escaping @Sendable (MacRealtimeTalkOutputRoute?) -> Void)
+    {
+        self.dataSourceObservation?.stop()
+        self.dataSourceObservation = nil
+        guard let deviceID = Self.defaultOutputDeviceID() else {
+            self.reportWarningOnce("default-output-read-failed")
+            onChange(nil)
+            return
+        }
+        guard let route = Self.currentRoute(deviceID: deviceID) else {
+            self.reportWarningOnce("output-route-read-failed")
+            onChange(nil)
+            return
+        }
+        if route.selectedDataSource == .failed {
+            self.reportWarningOnce("data-source-read-failed")
+        }
+        guard Self.hasDataSourceProperty(deviceID: deviceID) else {
+            onChange(route)
+            return
+        }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            guard let refreshedRoute = Self.currentRoute(deviceID: deviceID) else {
+                self.reportWarningOnce("output-route-read-failed")
+                onChange(nil)
+                return
+            }
+            if refreshedRoute.selectedDataSource == .failed {
+                self.reportWarningOnce("data-source-read-failed")
+            }
+            onChange(refreshedRoute)
+        }
+        guard let observation = MacRealtimeTalkAudioPropertyObservation(
+            objectID: deviceID,
+            selector: kAudioDevicePropertyDataSource,
+            scope: kAudioDevicePropertyScopeOutput,
+            listener: listener)
+        else {
+            // A supported source can change without the device ID changing. If it cannot
+            // be observed, poison the route so the suppression policy remains fail-closed.
+            self.reportWarningOnce("data-source-listener-failed")
+            onChange(MacRealtimeTalkOutputRoute(
+                transportType: route.transportType,
+                terminalTypes: route.terminalTypes,
+                selectedDataSource: .failed))
+            return
+        }
+        self.dataSourceObservation = observation
+        onChange(route)
+    }
+
+    private static func currentRoute(deviceID: AudioObjectID) -> MacRealtimeTalkOutputRoute? {
+        guard let transportType = uint32Property(
+            objectID: deviceID,
+            selector: kAudioDevicePropertyTransportType,
+            scope: kAudioObjectPropertyScopeGlobal)
+        else { return nil }
+
+        let terminalTypes = self.outputTerminalTypes(deviceID: deviceID)
+        return MacRealtimeTalkOutputRoute(
+            transportType: transportType,
+            terminalTypes: terminalTypes,
+            selectedDataSource: self.selectedDataSource(deviceID: deviceID))
+    }
+
+    private static func defaultOutputDeviceID() -> AudioObjectID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var deviceID = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID)
+        return status == noErr && deviceID != 0 ? deviceID : nil
+    }
+
+    private static func outputTerminalTypes(deviceID: AudioObjectID) -> [UInt32] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
+              size > 0,
+              Int(size) % MemoryLayout<AudioStreamID>.size == 0
+        else { return [] }
+
+        var streamIDs = [AudioStreamID](
+            repeating: 0,
+            count: Int(size) / MemoryLayout<AudioStreamID>.size)
+        guard AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &streamIDs) == noErr
+        else { return [] }
+
+        var terminalTypes: [UInt32] = []
+        terminalTypes.reserveCapacity(streamIDs.count)
+        for streamID in streamIDs {
+            guard let terminalType = self.uint32Property(
+                objectID: streamID,
+                selector: kAudioStreamPropertyTerminalType,
+                scope: kAudioObjectPropertyScopeGlobal)
+            else { return [] }
+            terminalTypes.append(terminalType)
+        }
+        return terminalTypes
+    }
+
+    private static func hasDataSourceProperty(deviceID: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectHasProperty(deviceID, &address)
+    }
+
+    private static func selectedDataSource(
+        deviceID: AudioObjectID) -> MacRealtimeTalkOutputDataSource
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(deviceID, &address) else { return .unsupported }
+
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
+              size > 0,
+              Int(size) % MemoryLayout<UInt32>.size == 0
+        else { return .failed }
+
+        var sourceIDs = [UInt32](
+            repeating: 0,
+            count: Int(size) / MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &sourceIDs) == noErr,
+            !sourceIDs.isEmpty
+        else { return .failed }
+
+        var kinds: [UInt32] = []
+        kinds.reserveCapacity(sourceIDs.count)
+        for sourceID in sourceIDs {
+            guard let kind = self.dataSourceKind(deviceID: deviceID, sourceID: sourceID)
+            else { return .failed }
+            kinds.append(kind)
+        }
+        return .selected(kinds: kinds)
+    }
+
+    private static func dataSourceKind(
+        deviceID: AudioObjectID,
+        sourceID: UInt32) -> UInt32?
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSourceKindForID,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var input = sourceID
+        var output: UInt32 = 0
+        var status = kAudioHardwareUnspecifiedError
+        withUnsafeMutablePointer(to: &input) { inputPointer in
+            withUnsafeMutablePointer(to: &output) { outputPointer in
+                var translation = AudioValueTranslation(
+                    mInputData: UnsafeMutableRawPointer(inputPointer),
+                    mInputDataSize: UInt32(MemoryLayout<UInt32>.size),
+                    mOutputData: UnsafeMutableRawPointer(outputPointer),
+                    mOutputDataSize: UInt32(MemoryLayout<UInt32>.size))
+                var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
+                status = AudioObjectGetPropertyData(
+                    deviceID,
+                    &address,
+                    0,
+                    nil,
+                    &size,
+                    &translation)
+            }
+        }
+        return status == noErr ? output : nil
+    }
+
+    private static func uint32Property(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope) -> UInt32?
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(
+            objectID,
+            &address,
+            0,
+            nil,
+            &size,
+            &value)
+        return status == noErr ? value : nil
+    }
+
+    private func reportWarningOnce(_ reason: String) {
+        guard !self.warningReported else { return }
+        self.warningReported = true
+        self.logger.warning(
+            "realtime output route observation degraded reason=\(reason, privacy: .public)")
+    }
 }
 
 enum MacRealtimeTalkAudioCaptureError: LocalizedError {

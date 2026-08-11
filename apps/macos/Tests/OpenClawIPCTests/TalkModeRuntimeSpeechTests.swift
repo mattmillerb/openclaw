@@ -75,6 +75,8 @@ private func waitForRelayClose(_ requests: RuntimeTestRelayRequestLog) async -> 
 
 @MainActor
 private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
+    private(set) var stopCount = 0
+
     func play(
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
@@ -83,10 +85,85 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
     }
 
     func stop() -> Double? {
-        nil
+        self.stopCount += 1
+        return nil
     }
 }
 
+private actor RuntimeContinuationBarrier {
+    private var entered = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        self.entered = true
+        self.entryWaiters.forEach { $0.resume() }
+        self.entryWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            self.releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        if self.entered { return }
+        await withCheckedContinuation { continuation in
+            self.entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        self.releaseContinuation?.resume()
+        self.releaseContinuation = nil
+    }
+}
+
+private final class RuntimeCommitProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedValues: [String] = []
+
+    func record(_ value: String) {
+        self.lock.withLock {
+            self.recordedValues.append(value)
+        }
+    }
+
+    func values() -> [String] {
+        self.lock.withLock { self.recordedValues }
+    }
+}
+
+private final class RuntimeRecognitionCapture {
+    let name: String
+
+    init(_ name: String) {
+        self.name = name
+    }
+}
+
+private enum RuntimeRecognitionStartError: Error {
+    case failed
+}
+
+private enum RuntimeRelayStartError: Error {
+    case failed
+}
+
+@MainActor
+private func makeRuntimeTestRealtimeSession(
+    player: RuntimeTestPCMPlayer) -> RealtimeTalkRelaySession
+{
+    RealtimeTalkRelaySession(
+        transport: RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+        options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+        audioCapture: RuntimeTestAudioCapture(),
+        pcmPlayer: player,
+        onStatus: { _ in },
+        onSpeakingChanged: { _ in })
+}
+
+@Suite(.serialized)
 struct TalkModeRuntimeSpeechTests {
     @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
         #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
@@ -256,6 +333,259 @@ struct TalkModeRuntimeSpeechTests {
 
         await runtime._test_cancelRealtimeRecovery()
         session.stop()
+    }
+
+    @Test @MainActor func `disabling during relay startup stops the published session`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let player = RuntimeTestPCMPlayer()
+        let session = makeRuntimeTestRealtimeSession(player: player)
+        let attempt = Task { @MainActor in
+            do {
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleGeneration,
+                    makeSession: { session },
+                    start: { _ in
+                        probe.record("start")
+                        await barrier.wait()
+                    })
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        #expect(await runtime._test_realtimeSessionIs(session))
+        await runtime.setEnabled(false)
+        await barrier.release()
+
+        #expect(await attempt.value == false)
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
+        #expect(probe.values() == ["start"])
+        #expect(player.stopCount == 1)
+    }
+
+    @Test func `processed recognition start failure retries a fresh raw capture`() {
+        let probe = RuntimeCommitProbe()
+
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { true },
+            prepare: { enableVoiceProcessing -> RuntimeRecognitionCapture in
+                if enableVoiceProcessing {
+                    probe.record("prepare-processed")
+                    probe.record("cleanup-processed")
+                    throw RuntimeRecognitionStartError.failed
+                }
+                probe.record("prepare-raw")
+                return RuntimeRecognitionCapture("raw")
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { enableVoiceProcessing, _ in
+                probe.record(enableVoiceProcessing ? "failed-processed" : "failed-raw")
+            })
+
+        #expect(started)
+        #expect(probe.values() == [
+            "prepare-processed",
+            "cleanup-processed",
+            "failed-processed",
+            "prepare-raw",
+            "publish-raw",
+        ])
+    }
+
+    @Test func `failed recognition candidates clean up without publishing`() {
+        let probe = RuntimeCommitProbe()
+
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { true },
+            prepare: { enableVoiceProcessing -> RuntimeRecognitionCapture in
+                let kind = enableVoiceProcessing ? "processed" : "raw"
+                probe.record("prepare-\(kind)")
+                probe.record("cleanup-\(kind)")
+                throw RuntimeRecognitionStartError.failed
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { enableVoiceProcessing, _ in
+                probe.record(enableVoiceProcessing ? "failed-processed" : "failed-raw")
+            })
+
+        #expect(!started)
+        #expect(probe.values() == [
+            "prepare-processed",
+            "cleanup-processed",
+            "failed-processed",
+            "prepare-raw",
+            "cleanup-raw",
+            "failed-raw",
+        ])
+    }
+
+    @Test @MainActor func `stale relay cleanup cannot clear a newer owned session`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleA = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let playerA = RuntimeTestPCMPlayer()
+        let sessionA = makeRuntimeTestRealtimeSession(player: playerA)
+        let attemptA = Task { @MainActor in
+            do {
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleA,
+                    makeSession: {
+                        await barrier.wait()
+                        return sessionA
+                    },
+                    start: { _ in })
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        await runtime.setEnabled(false)
+        let lifecycleB = await runtime._test_prepareEnabledLifecycle()
+        let playerB = RuntimeTestPCMPlayer()
+        let sessionB = makeRuntimeTestRealtimeSession(player: playerB)
+        try? await runtime._test_startRealtimeRelay(
+            lifecycleGeneration: lifecycleB,
+            makeSession: { sessionB },
+            start: { _ in })
+        await barrier.release()
+
+        #expect(await attemptA.value == false)
+        #expect(await runtime._test_realtimeSessionIs(sessionB))
+        #expect(playerA.stopCount == 1)
+        #expect(playerB.stopCount == 0)
+
+        await runtime._test_cancelRealtimeRecovery()
+        sessionB.stop()
+    }
+
+    @Test @MainActor func `current relay start failure selects native fallback`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
+        let fallbackProbe = RuntimeCommitProbe()
+        let player = RuntimeTestPCMPlayer()
+        let session = makeRuntimeTestRealtimeSession(player: player)
+        await runtime._test_setStartDependencies(
+            startRealtimeRelay: { lifecycleGeneration in
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleGeneration,
+                    makeSession: { session },
+                    start: { _ in throw RuntimeRelayStartError.failed })
+            },
+            startNativeFallback: { _ in fallbackProbe.record("native") })
+
+        await runtime.start()
+
+        #expect(fallbackProbe.values() == ["native"])
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
+        #expect(player.stopCount == 1)
+        #expect(await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration) != nil)
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `stale relay fallback cannot replace successor recognition owner`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
+        let fallbackProjectionBarrier = RuntimeContinuationBarrier()
+        let fallbackProbe = RuntimeCommitProbe()
+        let player = RuntimeTestPCMPlayer()
+        let session = makeRuntimeTestRealtimeSession(player: player)
+        await runtime._test_setStartDependencies(
+            startRealtimeRelay: { lifecycleGeneration in
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleGeneration,
+                    makeSession: { session },
+                    start: { _ in throw RuntimeRelayStartError.failed })
+            },
+            projectNativeFallback: {
+                await MainActor.run {
+                    TalkModeController.shared.updatePartialTranscript("stale fallback")
+                }
+                await fallbackProjectionBarrier.wait()
+            },
+            startNativeFallback: { _ in fallbackProbe.record("native") })
+
+        let start = Task { await runtime.start() }
+        await fallbackProjectionBarrier.waitUntilEntered()
+        let successorRecognition = await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration)
+        TalkModeController.shared.updatePartialTranscript("successor")
+        await fallbackProjectionBarrier.release()
+        await start.value
+
+        #expect(successorRecognition != nil)
+        #expect(await runtime.recognitionGeneration == successorRecognition)
+        #expect(TalkModeController.shared.partialTranscript == "successor")
+        #expect(fallbackProbe.values().isEmpty)
+        #expect(player.stopCount == 1)
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test func `stale recognition attempt preserves current owner`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let currentRecognition = await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration)
+
+        let staleRecognition = await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration &- 1)
+
+        #expect(currentRecognition != nil)
+        #expect(staleRecognition == nil)
+        #expect(await runtime.recognitionGeneration == currentRecognition)
+        await runtime.setEnabled(false)
+    }
+
+    @Test func `cancelled recognition attempt discards capture before publication`() {
+        let probe = RuntimeCommitProbe()
+        var isCurrent = true
+
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { isCurrent },
+            prepare: { _ in
+                isCurrent = false
+                return RuntimeRecognitionCapture("processed")
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { _, _ in probe.record("failed") })
+
+        #expect(!started)
+        #expect(probe.values() == ["discard-processed"])
+    }
+
+    @Test func `stale recognition cleanup cannot clear newer ownership`() {
+        let engineA = NSObject()
+        let engineB = NSObject()
+
+        #expect(!TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 1,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineA)))
+        #expect(!TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 2,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineA)))
+        #expect(TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 2,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineB)))
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {
