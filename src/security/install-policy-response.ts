@@ -52,7 +52,7 @@ const installPolicyFindingSchema = z
     line: z
       .number()
       .finite()
-      .transform((value) => Math.max(1, Math.floor(value)))
+      .transform((value) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.floor(value))))
       .optional()
       .catch(undefined),
     evidence: optionalFindingTextSchema,

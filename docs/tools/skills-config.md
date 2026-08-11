@@ -180,7 +180,8 @@ write one JSON object on stdout with an `allow`, `warn`, or `block` decision.
 `findings` array. Each finding requires non-empty string `ruleId` and `message`
 fields plus a `severity` of `info`, `warn`, or `critical`. Optional `file` and
 `evidence` values must be non-empty strings; a finite numeric `line` is rounded
-down and clamped to at least 1. Malformed finding entries are ignored, and
+down and clamped to the safe-integer range from 1 through `Number.MAX_SAFE_INTEGER`.
+Malformed finding entries are ignored, and
 invalid optional fields are omitted. A non-array `findings` value is treated as
 absent. Operator-facing reason and finding text are limited to 1,000 characters.
 OpenClaw retains at most 100 normalized findings for display. Only a `warn`

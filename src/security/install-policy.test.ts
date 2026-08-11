@@ -451,6 +451,31 @@ describe("runInstallPolicy", () => {
     expect(debugLogs.filter((message) => message.endsWith(": warned"))).toHaveLength(1);
   });
 
+  it("normalizes warning finding lines to positive safe integers", async () => {
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "warn",
+          reason: "review line normalization",
+          findings: [-2, 12.9, 1e100].map((line, index) => ({
+            ruleId: `line-${String(index)}`,
+            severity: "warn",
+            message: "Review line",
+            line,
+          })),
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    expect(result?.findings?.map((finding) => finding.line)).toEqual([
+      1,
+      12,
+      Number.MAX_SAFE_INTEGER,
+    ]);
+  });
+
   it("fingerprints warning reason changes beyond the display limit", async () => {
     const sharedPrefix = "r".repeat(1000);
     const runWarning = async (reason: string) =>
