@@ -97,6 +97,7 @@ struct MacRealtimeTalkAudioCaptureTests {
 
     @Test @MainActor func `capture rejects invalid target sample rate before touching hardware`() {
         let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
+        #expect(capture.suppressesInputDuringOutput)
 
         #expect(throws: MacRealtimeTalkAudioCaptureError.self) {
             try capture.start(
@@ -104,6 +105,39 @@ struct MacRealtimeTalkAudioCaptureTests {
                 onAudio: { _ in },
                 onFailure: { _ in })
         }
+        #expect(capture.suppressesInputDuringOutput)
+    }
+
+    @Test @MainActor func `queued route callback is ignored after observation retires`() async {
+        let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
+        let callback = capture._test_replaceOutputRouteObserver()
+
+        callback(self.headphonesRoute())
+        capture.stop()
+        await Task.yield()
+
+        #expect(capture.suppressesInputDuringOutput)
+    }
+
+    @Test @MainActor func `retired observer callback is ignored after replacement`() async {
+        let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
+        let retiredCallback = capture._test_replaceOutputRouteObserver()
+        _ = capture._test_replaceOutputRouteObserver()
+
+        retiredCallback(self.headphonesRoute())
+        await Task.yield()
+
+        #expect(capture.suppressesInputDuringOutput)
+    }
+
+    @Test @MainActor func `current observer enables headphone barge in`() async {
+        let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
+        let callback = capture._test_replaceOutputRouteObserver()
+
+        callback(self.headphonesRoute())
+        await Task.yield()
+
+        #expect(!capture.suppressesInputDuringOutput)
     }
 
     @Test func `allowlisted transports preserve barge in only for headphones`() {
@@ -304,6 +338,12 @@ struct MacRealtimeTalkAudioCaptureTests {
             transportType: transport,
             terminalTypes: terminals,
             selectedDataSource: source)
+    }
+
+    private func headphonesRoute() -> MacRealtimeTalkOutputRoute {
+        self.route(
+            transport: kAudioDeviceTransportTypeBuiltIn,
+            terminals: [kAudioStreamTerminalTypeHeadphones])
     }
 }
 
