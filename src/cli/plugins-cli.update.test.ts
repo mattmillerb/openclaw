@@ -1481,8 +1481,9 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "--all", "--acknowledge-install-policy-warning"]);
 
-    const pluginAcknowledgement =
-      expectSingleCallParams(updateNpmInstalledPluginsMock).onInstallPolicyWarning;
+    const pluginAcknowledgement = expectSingleCallParams(
+      updateNpmInstalledPluginsMock,
+    ).onInstallPolicyWarning;
     const hookAcknowledgement = expectSingleCallParams(
       updateNpmInstalledHookPacksMock,
     ).onInstallPolicyWarning;
