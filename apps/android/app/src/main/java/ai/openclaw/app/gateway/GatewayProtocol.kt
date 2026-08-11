@@ -574,6 +574,8 @@ enum class GatewayMethod(
   ProjectsSearchRemote("projects.searchRemote"),
   DesktopObserve("desktop.observe"),
   DesktopLaunch("desktop.launch"),
+  DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
+  DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
 }
 
 enum class GatewayEvent(
