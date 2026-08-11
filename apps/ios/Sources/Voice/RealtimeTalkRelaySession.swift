@@ -80,6 +80,11 @@ extension RealtimeTalkRelayTransport {
                 guard await gateway.currentRoute() == route else { throw CancellationError() }
                 return response
             },
-            isCurrent: { await gateway.currentRoute() == route })
+            isCurrent: { await gateway.currentRoute() == route },
+            supportsOutputGeneration: {
+                await gateway.supportsServerCapability(
+                    .talkOutputGeneration,
+                    ifCurrentRoute: route) == true
+            })
     }
 }

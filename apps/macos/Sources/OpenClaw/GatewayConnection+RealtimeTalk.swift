@@ -38,6 +38,11 @@ extension GatewayConnection {
             },
             isCurrent: {
                 await self.isCurrentServerLease(lease)
+            },
+            supportsOutputGeneration: {
+                await self.supportsServerCapability(
+                    .talkOutputGeneration,
+                    ifCurrentServerLease: lease) == true
             })
     }
 

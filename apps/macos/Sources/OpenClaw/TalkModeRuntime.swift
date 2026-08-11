@@ -104,6 +104,7 @@ actor TalkModeRuntime {
     var bypassRealtimeOnNextStart = false
     var realtimeRelayGeneration: UInt64 = 0
     var realtimeRelayStartGeneration: UInt64?
+    private var pendingRealtimeRelayStartLifecycleGeneration: Int?
     var realtimeRestartGeneration: UInt64 = 0
     var realtimeRestartTask: Task<Void, Never>?
     var startDependencies: StartDependencies?
@@ -157,29 +158,61 @@ actor TalkModeRuntime {
 
         guard self.isEnabled else { return }
 
+        if paused {
+            self.pendingRealtimeRelayStartLifecycleGeneration = nil
+            if self.realtimeRelayStartGeneration != nil {
+                self.realtimeRelayGeneration &+= 1
+            }
+        } else if self.realtimeRelayStartGeneration != nil, self.shouldAttemptRealtimeRelay() {
+            self.pendingRealtimeRelayStartLifecycleGeneration = self.lifecycleGeneration
+            return
+        }
+
         if paused, self.realtimeSession == nil {
             self.cancelScheduledRealtimeRecovery()
         }
 
         if let realtimeSession {
             let relayGeneration = self.realtimeRelayGeneration
-            do {
-                try await MainActor.run {
-                    try realtimeSession.setInputPaused(paused)
+            if paused {
+                await MainActor.run { realtimeSession.setOutputPaused(true) }
+                guard self.isPaused,
+                      self.realtimeRelayGeneration == relayGeneration,
+                      self.realtimeSession === realtimeSession,
+                      await self.setRealtimeInputPaused(
+                          true,
+                          session: realtimeSession,
+                          relayGeneration: relayGeneration)
+                else { return }
+                self.lastTranscript = ""
+                self.lastHeard = nil
+                self.lastSpeechEnergyAt = nil
+                self.phase = .idle
+                await MainActor.run {
+                    TalkModeController.shared.updateLevel(0)
+                    TalkModeController.shared.updateSpeakingLevel(nil)
+                    TalkModeController.shared.updatePartialTranscript("")
+                    TalkModeController.shared.updatePhase(.idle)
                 }
-                if !paused {
-                    self.phase = .listening
-                    await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+            } else {
+                guard await self.setRealtimeInputPaused(
+                    false,
+                    session: realtimeSession,
+                    relayGeneration: relayGeneration),
+                    !self.isPaused,
+                    self.realtimeRelayGeneration == relayGeneration,
+                    self.realtimeSession === realtimeSession
+                else { return }
+                await MainActor.run { realtimeSession.setOutputPaused(false) }
+                guard !self.isPaused,
+                      self.realtimeRelayGeneration == relayGeneration,
+                      self.realtimeSession === realtimeSession
+                else {
+                    await MainActor.run { realtimeSession.setOutputPaused(true) }
+                    return
                 }
-            } catch {
-                // Only the unpause branch throws, and the session restores its own input-paused
-                // state on the way out. Without this the runtime would report Talk as running
-                // with no microphone, so route it through the typed close-and-recover path.
-                self.logger.error(
-                    "talk realtime pause transition failed: \(error.localizedDescription, privacy: .public)")
-                await self.handleRealtimeInputRestartFailure(
-                    error.localizedDescription,
-                    relayGeneration: relayGeneration)
+                self.phase = .listening
+                await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             }
             return
         }
@@ -264,8 +297,12 @@ actor TalkModeRuntime {
                 }
                 return
             } catch is CancellationError {
+                if self.consumePendingRealtimeRelayStart() {
+                    await self.start()
+                }
                 return
             } catch {
+                self.pendingRealtimeRelayStartLifecycleGeneration = nil
                 guard self.canOwnNativeFallback(fallbackOwner) else { return }
                 self.logger.error(
                     "talk realtime unavailable; using native fallback: " +
@@ -291,6 +328,7 @@ actor TalkModeRuntime {
     }
 
     private func stop() async {
+        self.pendingRealtimeRelayStartLifecycleGeneration = nil
         self.resetRealtimeRecoveryState()
         self.realtimeRelayGeneration &+= 1
         self.realtimeRelayStartGeneration = nil
@@ -319,6 +357,14 @@ actor TalkModeRuntime {
             TalkModeController.shared.updatePartialTranscript("")
             TalkModeController.shared.updatePhase(.idle)
         }
+    }
+
+    func consumePendingRealtimeRelayStart() -> Bool {
+        guard let generation = self.pendingRealtimeRelayStartLifecycleGeneration else { return false }
+        self.pendingRealtimeRelayStartLifecycleGeneration = nil
+        return generation == self.lifecycleGeneration && self.isEnabled && !self.isPaused &&
+            self.realtimeSession == nil && self.realtimeRelayStartGeneration == nil &&
+            self.shouldAttemptRealtimeRelay()
     }
 
     #if DEBUG
