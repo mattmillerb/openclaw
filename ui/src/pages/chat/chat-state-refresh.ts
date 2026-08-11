@@ -267,7 +267,12 @@ export async function refreshChatMetadata(
     if (!ownsChatMetadataRequest(request)) {
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
-    const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
+    // chat.metadata remains the compatibility source for commands only. Picker inventory must
+    // always come from the live, agent-scoped models.list result so stale static models cannot
+    // reappear when chat.startup omits metadata or an older Gateway serves this fallback path.
+    const metadataApplied = applyChatMetadataResult(host, client, agentId, result, {
+      models: false,
+    });
     if (!metadataApplied.models || !metadataApplied.commands) {
       await refreshMissingChatMetadata(request, metadataApplied, opts);
     }

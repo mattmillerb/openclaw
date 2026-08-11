@@ -45,6 +45,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "models.list",
         "sessions.create",
         "sessions.dispatch",
         "sessions.reclaim",

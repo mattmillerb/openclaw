@@ -322,7 +322,7 @@ describe("new-session model runtime", () => {
 
   it.each([
     ["generic transport error", new Error("metadata unavailable")],
-    ["request timeout", new Error("gateway request timeout for chat.metadata")],
+    ["request timeout", new Error("gateway request timeout for models.list")],
   ])("renders %s as unavailable instead of a default-only catalog", async (_label, error) => {
     const { context, request } = contextWith([]);
     request.mockRejectedValueOnce(error);

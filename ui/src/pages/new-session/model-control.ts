@@ -612,7 +612,7 @@ export class NewSessionModelControl {
       loading: false,
       modelCatalog: this.catalog,
       modelCatalogState: {
-        // chat.metadata and agents.list hydrate independently. Do not expose a
+        // models.list and agents.list hydrate independently. Do not expose a
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
         ...(this.metadataState.status === "error" ? { onRetry: this.retryMetadata } : {}),

@@ -16,8 +16,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
 const NEW_SESSION_FEATURE_METHODS = [
-  "chat.metadata",
   "chat.startup",
+  "models.list",
   "sessions.create",
   "sessions.dispatch",
 ] as const;

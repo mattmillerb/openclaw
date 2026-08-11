@@ -10,7 +10,13 @@ const suite = createNewSessionPageE2eSuite();
 
 async function openDraft(
   operatorScopes: string[],
-  featureMethods = ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
+  featureMethods = [
+    "chat.metadata",
+    "chat.startup",
+    "models.list",
+    "sessions.create",
+    "sessions.dispatch",
+  ],
 ) {
   const context = await suite.browser.newContext({
     locale: "en-US",
@@ -81,6 +87,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "models.list",
         "fs.listDir",
         "sessions.create",
         "worktrees.branches",
@@ -142,6 +149,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "models.list",
         "fs.listDir",
         "sessions.create",
         "worktrees.branches",
@@ -209,6 +217,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "models.list",
         "fs.listDir",
         "sessions.create",
         "worktrees.branches",
@@ -273,7 +282,7 @@ suite.define(() => {
   it("blocks creation when the connected Gateway explicitly omits sessions.create", async () => {
     const { context, gateway, page } = await openDraft(
       ["operator.admin", "operator.read", "operator.write"],
-      ["chat.metadata", "chat.startup"],
+      ["chat.metadata", "chat.startup", "models.list"],
     );
     try {
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isDisabled()).toBe(true);

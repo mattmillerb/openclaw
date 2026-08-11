@@ -1434,7 +1434,17 @@ describe("refreshChatMetadata", () => {
     }>((resolve) => {
       resolveMetadata = resolve;
     });
+    const liveModel = {
+      id: "work-model",
+      name: "Work Model",
+      provider: "openai",
+      available: true,
+    };
     const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        expect(params).toEqual({ agentId: "work", view: "configured" });
+        return { models: [liveModel] };
+      }
       expect(method).toBe("chat.metadata");
       expect(params).toEqual({ agentId: "work" });
       return await metadata;
@@ -1445,38 +1455,37 @@ describe("refreshChatMetadata", () => {
     state.sessionKey = "agent:work:another";
     resolveMetadata?.({
       commands: [],
-      models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+      models: [{ id: "stale-model", name: "Stale Model", provider: "openai", available: false }],
     });
     await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "work-model", name: "Work Model", provider: "openai", available: true },
-    ]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatModelCatalog).toEqual([liveModel]);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
-    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
-      commands: [],
-      models: [
-        {
-          id: `${params?.agentId}-model`,
-          name: `${params?.agentId} Model`,
-          provider: "openai",
-        },
-      ],
-    }));
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+      const model = {
+        id: `${params?.agentId}-model`,
+        name: `${params?.agentId} Model`,
+        provider: "openai",
+      };
+      return method === "models.list" ? { models: [model] } : { commands: [], models: [model] };
+    });
     const state = createMetadataState(request);
 
     await refreshChatMetadata(state);
     state.sessionKey = "agent:work:second";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     state.sessionKey = "agent:other:main";
     await refreshChatMetadata(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenLastCalledWith("models.list", {
+      agentId: "other",
+      view: "configured",
+    });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -1531,10 +1540,21 @@ describe("refreshChatMetadata", () => {
     }>((resolve) => {
       resolveOther = resolve;
     });
-    const request = vi.fn(
-      async (_method: string, params?: { agentId?: string }) =>
-        await (params?.agentId === "work" ? workMetadata : otherMetadata),
-    );
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+      if (method === "models.list") {
+        const isWork = params?.agentId === "work";
+        return {
+          models: [
+            {
+              id: isWork ? "work-model" : "other-model",
+              name: isWork ? "Work Model" : "Other Model",
+              provider: "openai",
+            },
+          ],
+        };
+      }
+      return await (params?.agentId === "work" ? workMetadata : otherMetadata);
+    });
     const state = createMetadataState(request);
 
     const workRefresh = refreshChatMetadata(state);
@@ -1580,10 +1600,13 @@ describe("refreshChatMetadata", () => {
     }>((resolve) => {
       resolveSecond = resolve;
     });
-    let requestCount = 0;
-    const request = vi.fn(async () => {
-      requestCount += 1;
-      return await (requestCount === 1 ? firstMetadata : secondMetadata);
+    let metadataRequestCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [{ id: "new-model", name: "New Model", provider: "openai" }] };
+      }
+      metadataRequestCount += 1;
+      return await (metadataRequestCount === 1 ? firstMetadata : secondMetadata);
     });
     const state = createMetadataState(request);
 
@@ -1728,6 +1751,9 @@ describe("refreshChatMetadata", () => {
       resolveCommands = resolve;
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [] };
+      }
       expect(method).toBe("commands.list");
       return await commands;
     });
