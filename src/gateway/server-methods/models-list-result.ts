@@ -58,6 +58,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import {
+  applyProviderCatalogOutcomesToModelAuth,
+  projectPublicProviderCatalogOutcomes,
+} from "./models-list-provider-outcomes.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListEntry = Pick<
@@ -75,14 +79,6 @@ type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 };
-
-function projectProviderCatalogOutcomes(outcomes: readonly ProviderCatalogOutcome[] | undefined) {
-  return outcomes?.map(({ provider, profileId, status }) => ({
-    provider,
-    ...(profileId ? { profileId } : {}),
-    status,
-  }));
-}
 
 let loggedSlowModelsListCatalog = false;
 
@@ -210,39 +206,13 @@ function createModelsListEntryEvaluator(params: {
               }),
             }
           : evaluation;
-      const provider = normalizeProviderId(entry.provider);
-      const outcomes =
-        params.providerOutcomes?.filter(
-          (outcome) => normalizeProviderId(outcome.provider) === provider,
-        ) ?? [];
-      const modelId = (identity?.id ?? entry.id).trim().toLowerCase();
-      const authorizingProfiles = outcomes.filter(
-        (outcome) =>
-          outcome.status === "ready" &&
-          outcome.profileId !== undefined &&
-          outcome.modelIds?.some((candidate) => candidate.trim().toLowerCase() === modelId),
-      );
-      if (
-        authorizingProfiles.length > 0 &&
-        !authorizingProfiles.some((outcome) => outcome.profileId === resolved.selectedProfileId)
-      ) {
-        for (const outcome of authorizingProfiles) {
-          const candidate = evaluateForProfile(outcome.profileId);
-          if (candidate.availability === true) {
-            return candidate;
-          }
-        }
-        return { ...resolved, availability: false };
-      }
-      // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
-      // profile discovery tested; widening it would hide routes backed by another valid profile.
-      return outcomes.some(
-        (outcome) =>
-          outcome.status === "auth-rejected" &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
-      )
-        ? { ...resolved, availability: false }
-        : resolved;
+      return applyProviderCatalogOutcomesToModelAuth({
+        provider: entry.provider,
+        modelId: identity?.id ?? entry.id,
+        outcomes: params.providerOutcomes,
+        resolved,
+        evaluateForProfile,
+      });
     });
     pending.set(cacheKey, next);
     return next;
@@ -652,7 +622,7 @@ export async function buildModelsListResult(
   const catalog = snapshot.entries;
   const routeVariants = snapshot.routeVariants;
   const providerOutcomes = snapshot.providerOutcomes;
-  const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
+  const publicProviderOutcomes = projectPublicProviderCatalogOutcomes(providerOutcomes);
   const outcomeProjection = publicProviderOutcomes?.length
     ? { providerOutcomes: publicProviderOutcomes }
     : {};
