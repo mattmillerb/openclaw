@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
@@ -9,10 +10,13 @@ import {
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
+  type ModelAuthAvailability,
   type ModelAuthAvailabilityEvaluation,
   type ModelAuthAvailabilityRef,
   type ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -39,6 +43,38 @@ function listEnabledSyntheticAuthProviderRefs(params: {
   return result.snapshot.plugins
     .filter((plugin) => plugin.enabled)
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
+}
+
+export function resolveModelsListLegacyEntryAvailability(params: {
+  authResolver: ModelAuthAvailabilityResolver;
+  entry: ModelCatalogEntry;
+  primaryAvailability: ModelAuthAvailability;
+  cfg: OpenClawConfig;
+  agentId: string;
+}): ModelAuthAvailability {
+  if (params.primaryAvailability === true) {
+    return true;
+  }
+  let available = params.primaryAvailability;
+  const runtimeProvider = resolveCliRuntimeExecutionProvider({
+    provider: params.entry.provider,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelId: params.entry.id,
+  });
+  if (
+    runtimeProvider &&
+    normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
+  ) {
+    const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
+    if (runtimeAvailable === true) {
+      return true;
+    }
+    if (available === false && runtimeAvailable === undefined) {
+      available = undefined;
+    }
+  }
+  return available;
 }
 
 export function createModelsListAuthResolver(params: {

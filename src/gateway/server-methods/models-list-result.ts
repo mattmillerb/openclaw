@@ -14,7 +14,6 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type {
-  ModelAuthAvailability,
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
@@ -36,7 +35,6 @@ import {
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -57,7 +55,10 @@ import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.type
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
-import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import {
+  createModelsListAuthResolver,
+  resolveModelsListLegacyEntryAvailability,
+} from "./models-list-auth-resolver.js";
 import {
   applyProviderCatalogOutcomesToModelAuth,
   projectPublicProviderCatalogOutcomes,
@@ -73,7 +74,6 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
-type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
@@ -128,38 +128,6 @@ function resolveModelChoiceAgentRuntime(params: {
   };
 }
 
-function resolveLegacyEntryAvailability(params: {
-  authResolver: ModelAuthAvailabilityResolver;
-  entry: ModelCatalogEntry;
-  primaryAvailability: ModelsListAvailability;
-  cfg: OpenClawConfig;
-  agentId: string;
-}): ModelsListAvailability {
-  if (params.primaryAvailability === true) {
-    return true;
-  }
-  let available = params.primaryAvailability;
-  const runtimeProvider = resolveCliRuntimeExecutionProvider({
-    provider: params.entry.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelId: params.entry.id,
-  });
-  if (
-    runtimeProvider &&
-    normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
-  ) {
-    const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true) {
-      return true;
-    }
-    if (available === false && runtimeAvailable === undefined) {
-      available = undefined;
-    }
-  }
-  return available;
-}
-
 function createModelsListEntryEvaluator(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -197,7 +165,7 @@ function createModelsListEntryEvaluator(params: {
         evaluation.routeResolution === null && normalizeProviderId(entry.provider) !== "openai"
           ? {
               ...evaluation,
-              availability: resolveLegacyEntryAvailability({
+              availability: resolveModelsListLegacyEntryAvailability({
                 authResolver: params.authResolver,
                 entry,
                 primaryAvailability: evaluation.availability,
