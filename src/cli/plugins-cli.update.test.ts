@@ -1426,13 +1426,13 @@ describe("plugins cli update", () => {
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server",
     });
-    loadConfig.mockReturnValue(config);
+    pluginCliConfigMock.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({ config, changed: false, outcomes: [] });
+    updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
 
     await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server"]);
 
-    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
     expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
   });
 
@@ -1442,9 +1442,9 @@ describe("plugins cli update", () => {
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server",
     });
-    loadConfig.mockReturnValue(config);
+    pluginCliConfigMock.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({ config, changed: false, outcomes: [] });
+    updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
 
     await runPluginsCommand([
       "plugins",
@@ -1453,7 +1453,7 @@ describe("plugins cli update", () => {
       "--acknowledge-install-policy-warning",
     ]);
 
-    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
     expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
   });
 
@@ -1463,7 +1463,7 @@ describe("plugins cli update", () => {
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server",
     });
-    loadConfig.mockReturnValue(config);
+    pluginCliConfigMock.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
     setHookInstallRecords({
       "demo-hooks": {
@@ -1473,7 +1473,7 @@ describe("plugins cli update", () => {
       },
     });
     primePluginUpdate(config);
-    updateNpmInstalledHookPacks.mockResolvedValue({
+    updateNpmInstalledHookPacksMock.mockResolvedValue({
       config,
       changed: false,
       outcomes: [],
@@ -1482,9 +1482,9 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "--all", "--acknowledge-install-policy-warning"]);
 
     const pluginAcknowledgement =
-      expectSingleCallParams(updateNpmInstalledPlugins).onInstallPolicyWarning;
+      expectSingleCallParams(updateNpmInstalledPluginsMock).onInstallPolicyWarning;
     const hookAcknowledgement = expectSingleCallParams(
-      updateNpmInstalledHookPacks,
+      updateNpmInstalledHookPacksMock,
     ).onInstallPolicyWarning;
     if (typeof pluginAcknowledgement !== "function") {
       throw new Error("expected plugin install-policy acknowledgement callback");
