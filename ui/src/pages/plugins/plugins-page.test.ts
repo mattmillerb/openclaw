@@ -260,6 +260,8 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2),
     );
+    await page.install("clawhub:@openclaw/lobster", installRequest);
+    expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2);
     expect(page.messages[rowKey]?.installPolicyWarning).toBeDefined();
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
@@ -367,50 +369,6 @@ describe("PluginsPage", () => {
     await page.refreshCatalog();
     expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined();
     expect(page.result?.plugins[0]?.installed).toBe(false);
-  });
-
-  it("deduplicates an active install across catalog and ClawHub search rows", async () => {
-    const pendingInstall = deferred<PluginMutationResult>();
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.install") {
-        return pendingInstall.promise;
-      }
-      if (method === "plugins.list") {
-        return createResult(
-          createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
-        );
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const harness = createGateway(client);
-    const catalog = createResult(
-      createPlugin({
-        id: "lobster",
-        name: "Lobster",
-        installed: false,
-        install: { source: "clawhub", packageName: "@openclaw/lobster" },
-      }),
-    );
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway, catalog),
-    );
-    const installRequest = {
-      source: "clawhub",
-      packageName: "@openclaw/lobster",
-    } satisfies PluginInstallRequest;
-
-    const catalogInstall = page.install("plugin:lobster", installRequest);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    await page.install("clawhub:@openclaw/lobster", installRequest);
-    expect(request).toHaveBeenCalledOnce();
-
-    pendingInstall.resolve({
-      ok: true,
-      plugin: createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
-      restartRequired: true,
-    });
-    await catalogInstall;
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {

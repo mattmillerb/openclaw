@@ -780,7 +780,7 @@ function renderPluginRow(
 ): TemplateResult {
   const key = pluginRowKey(plugin.id);
   const installOperation = installOperationState(props, plugin.install);
-  const busy = Boolean(props.busy[key] || installOperation.busy);
+  const busy = props.busy[key] || installOperation.busy;
   return html`
     <article
       class="settings-row plugins-item plugins-item--clickable"
@@ -1048,7 +1048,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const key = clawHubRowKey(pkg.name);
   const installRequest = { source: "clawhub", packageName: pkg.name } as const;
   const installOperation = installOperationState(props, installRequest, pkg.runtimeId);
-  const busy = Boolean(props.busy[key] || installOperation.busy);
+  const busy = props.busy[key] || installOperation.busy;
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1219,7 +1219,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
   }
   const key = pluginRowKey(plugin.id);
   const installOperation = installOperationState(props, plugin.install);
-  const busy = Boolean(props.busy[key] || installOperation.busy);
+  const busy = props.busy[key] || installOperation.busy;
   return html`
     <openclaw-modal-dialog
       label=${plugin.name}
