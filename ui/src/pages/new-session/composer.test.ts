@@ -2,15 +2,16 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { resetChatComposerState } from "../chat/components/chat-composer.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController, renderNewSessionDraftComposer } from "./composer.ts";
+import { renderNewSessionDraftComposer } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
-const textareaControllers: NewSessionComposerTextareaController[] = [];
 
 function renderComposer(
   overrides: {
@@ -31,17 +32,11 @@ function renderComposer(
     message?: string;
     onInput?: (message: string) => void;
     onSubmit?: () => void;
-    textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
   attachmentDrafts.push(attachmentDraft);
-  const textareaController =
-    overrides.textareaController ?? new NewSessionComposerTextareaController();
-  if (!textareaControllers.includes(textareaController)) {
-    textareaControllers.push(textareaController);
-  }
   render(
     renderNewSessionDraftComposer({
       agentId: "main",
@@ -57,10 +52,10 @@ function renderComposer(
       submitDisabledReason: overrides.submitDisabledReason,
       terminalAction: overrides.terminalAction,
       submitting: overrides.submitting ?? false,
-      textareaController,
       messageLocked: overrides.messageLocked,
       incognitoDisabledReason: overrides.incognitoDisabledReason,
       onInput: overrides.onInput ?? (() => undefined),
+      onRequestUpdate: () => undefined,
       onVisibilityChange: overrides.onVisibilityChange,
       onSubmit: overrides.onSubmit ?? (() => undefined),
     }),
@@ -70,7 +65,7 @@ function renderComposer(
   if (!composer) {
     throw new Error("Expected new-session composer");
   }
-  return { attachmentDraft, composer, container, textareaController };
+  return { attachmentDraft, composer, container };
 }
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
@@ -86,12 +81,90 @@ afterEach(() => {
     attachmentDraft.reset({ release: true });
   }
   attachmentDrafts.length = 0;
-  for (const textareaController of textareaControllers) {
-    textareaController.disconnect();
-  }
-  textareaControllers.length = 0;
+  resetChatComposerState("new-session");
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("new-session composer prompt authoring", () => {
+  it("shares slash and skill completion while omitting existing-session actions", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    const container = document.createElement("div");
+    const attachmentDraft = new NewSessionAttachmentDraft(() => draw());
+    const onSubmit = vi.fn();
+    let message = "";
+    attachmentDrafts.push(attachmentDraft);
+
+    const draw = () => {
+      render(
+        renderNewSessionDraftComposer({
+          agentId: "main",
+          attachmentDraft,
+          canSubmit: true,
+          context: undefined,
+          isCatalogTarget: true,
+          message,
+          modelControl: new NewSessionModelControl(draw),
+          requiresModifier: false,
+          submitting: false,
+          onInput: (next) => {
+            message = next;
+            draw();
+          },
+          onRequestUpdate: draw,
+          onSubmit,
+        }),
+        container,
+      );
+    };
+    const input = (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("Expected composer textarea");
+      }
+      textarea.value = value;
+      textarea.setSelectionRange(value.length, value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    };
+    draw();
+
+    const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
+    expect(shell?.dataset.composerStyle).toBe("new-session");
+    expect(container.querySelector(".agent-chat__composer-status-stack")).toBeNull();
+    expect(container.querySelector(".agent-chat__run-status-announcement")).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-meta")).toBeNull();
+
+    input("/");
+    const slashMenu = container.querySelector<HTMLElement>("[role='listbox']");
+    const slashCommands = Array.from(
+      slashMenu?.querySelectorAll<HTMLElement>(".slash-menu-name") ?? [],
+    ).map((item) => item.textContent?.trim());
+    expect(slashMenu?.getAttribute("aria-label")).toBe("Slash commands");
+    expect(slashCommands).not.toContain("/clear");
+    expect(slashCommands).not.toContain("/stop");
+
+    input("Polish this with $pro");
+    const skillMenu = container.querySelector<HTMLElement>("[role='listbox']");
+    expect(skillMenu?.getAttribute("aria-label")).toBe("Skill references");
+    expect(skillMenu?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    textarea?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    expect(message).toBe("Polish this with $prose ");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });
 
 describe("new-session composer keyboard submission", () => {
@@ -226,9 +299,8 @@ describe("new-session composer sizing lifecycle", () => {
       disconnect = disconnect;
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    const textareaController = new NewSessionComposerTextareaController();
     const onInput = vi.fn();
-    const first = renderComposer({ textareaController, onInput });
+    const first = renderComposer({ onInput });
     document.body.append(first.container);
     const textarea = first.composer.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) {
@@ -244,6 +316,7 @@ describe("new-session composer sizing lifecycle", () => {
     });
     await Promise.resolve();
     const readsAfterAttach = scrollHeightReads;
+    const observersAfterAttach = resizeObserverConstructed.mock.calls.length;
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -260,8 +333,8 @@ describe("new-session composer sizing lifecycle", () => {
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
         submitting: false,
-        textareaController,
         onInput,
+        onRequestUpdate: () => undefined,
         onSubmit: () => undefined,
       }),
       first.container,
@@ -269,7 +342,7 @@ describe("new-session composer sizing lifecycle", () => {
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(resizeObserverConstructed).toHaveBeenCalledTimes(observersAfterAttach);
     expect(disconnect).not.toHaveBeenCalled();
     expect(scrollHeightReads).toBe(readsAfterInput);
 
@@ -284,8 +357,8 @@ describe("new-session composer sizing lifecycle", () => {
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
         submitting: false,
-        textareaController,
         onInput,
+        onRequestUpdate: () => undefined,
         onSubmit: () => undefined,
       }),
       first.container,
@@ -294,10 +367,8 @@ describe("new-session composer sizing lifecycle", () => {
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
     expect(readsAfterAttach).toBeGreaterThan(0);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(resizeObserverConstructed).toHaveBeenCalledTimes(observersAfterAttach);
     expect(disconnect).not.toHaveBeenCalled();
-    textareaController.disconnect();
-    expect(disconnect).toHaveBeenCalledOnce();
     first.container.remove();
   });
 });

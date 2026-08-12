@@ -56,6 +56,13 @@ export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
 
 export type ChatComposerProps = {
+  /** Lightweight first-turn rendering omits controls that require an existing session. */
+  style?: "session" | "new-session";
+  shellClass?: string;
+  textareaClass?: string;
+  placeholder?: string;
+  primaryActions?: TemplateResult | typeof nothing;
+  commandFilter?: (command: SlashCommandDef) => boolean;
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -63,6 +70,7 @@ export type ChatComposerProps = {
   offline?: boolean;
   queuedOutboxCount?: number;
   canSend: boolean;
+  canSubmit?: boolean;
   disabledReason: string | null;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
@@ -126,12 +134,12 @@ export type ChatComposerProps = {
   onDismissRealtimeTalkError?: () => void;
   onDictationError?: (message: string) => void;
   onAbort?: () => void;
-  onQueueRemove: (id: string) => void;
+  onQueueRemove?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   queuedEdit?: ChatQueuedEditProps;
-  onNewSession: () => void;
+  onNewSession?: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onRemoveAttachment?: (attachment: ChatAttachment) => void;
