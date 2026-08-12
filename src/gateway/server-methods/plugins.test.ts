@@ -8,6 +8,7 @@ import type {
 } from "../../plugins/install-security-scan.types.js";
 import { parseInstallPolicyResponse } from "../../security/install-policy-response.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { revokeInstallPolicyAcknowledgements } from "../plugin-install-policy-acknowledgement-state.js";
 
 type InstallPolicyWarningScanIdentity = InstallPolicyWarningOccurrence["scan"];
 type ManagementServiceModule = typeof import("../../plugins/management-service.js");
@@ -796,7 +797,7 @@ describe("plugin management Gateway handlers", () => {
       installPolicyWarningAcknowledgement: acknowledgementToken,
     });
     await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledTimes(2));
-    await drainGlobalSingletonLifecycleState("restart");
+    revokeInstallPolicyAcknowledgements();
     resumeInstall();
 
     expect((await retry).error).toMatchObject({

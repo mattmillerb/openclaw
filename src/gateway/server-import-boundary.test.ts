@@ -234,7 +234,7 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
   });
 
-  it("fences config reload before gateway teardown and gateway_stop hooks", () => {
+  it("fences install approvals and config reload before gateway teardown", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
@@ -242,6 +242,7 @@ describe("gateway startup import boundaries", () => {
     const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
+    const markHelperBlock = serverImpl.slice(markHelperStart, markHelperEnd);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
     const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
@@ -253,14 +254,15 @@ describe("gateway startup import boundaries", () => {
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);
     expect(markHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "clearPostReadyMaintenanceTimer();",
+    expect(markHelperBlock).toContain("clearPostReadyMaintenanceTimer();");
+    expect(markHelperBlock).toContain("revokeInstallPolicyAcknowledgements();");
+    expect(markHelperBlock).toContain("cronReconciliation.invalidate();");
+    expect(markHelperBlock).toContain("void stopOutboundDeliveryRecoveryForClose();");
+    expect(markHelperBlock.indexOf("revokeInstallPolicyAcknowledgements();")).toBeLessThan(
+      markHelperBlock.indexOf("void stopOutboundDeliveryRecoveryForClose();"),
     );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "cronReconciliation.invalidate();",
-    );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
+    expect(markHelperBlock.indexOf("revokeInstallPolicyAcknowledgements();")).toBeLessThan(
+      markHelperBlock.indexOf("void stopMediaCleanupForClose();"),
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(

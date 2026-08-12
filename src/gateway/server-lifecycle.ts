@@ -24,6 +24,7 @@ import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-ses
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
+import { revokeInstallPolicyAcknowledgements } from "./plugin-install-policy-acknowledgement-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -423,6 +424,9 @@ export async function prepareGatewayLifecycle(params: {
   };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    // Approval-bearing installs can survive close waits. Revoke before the first
+    // await so old-generation work cannot publish during teardown.
+    revokeInstallPolicyAcknowledgements();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();

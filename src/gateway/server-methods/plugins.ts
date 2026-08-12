@@ -28,33 +28,18 @@ import {
   type ManagedPluginInstallPolicyAcknowledgement,
   type ManagedPluginSourceInstallRequest,
 } from "../../plugins/management-service.js";
-import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveGlobalSet } from "../../shared/global-singleton.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { readInstallPolicyWarningErrorDetails } from "../install-policy-warning-error-details.js";
+import { getInstallPolicyAcknowledgementState } from "../plugin-install-policy-acknowledgement-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const INSTALL_POLICY_ACKNOWLEDGEMENT_TTL_MS = 5 * 60_000;
 const MAX_INSTALL_POLICY_ACKNOWLEDGEMENTS = 256;
 
-type InstallPolicyAcknowledgement = {
-  expiresAt: number;
-  generation: number;
-  requestKey: string;
-  resolvedRequest: ManagedPluginSourceInstallRequest;
-  warnings: InstallPolicyWarningOccurrence[];
-};
-
-const installPolicyAcknowledgementState = resolveGlobalSingleton(
-  Symbol.for("openclaw.installPolicyAcknowledgements"),
-  () => ({ generation: 0, records: new Map<string, InstallPolicyAcknowledgement>() }),
-  (state) => {
-    state.generation += 1;
-    state.records.clear();
-  },
-  "close-and-restart",
-);
+const installPolicyAcknowledgementState = getInstallPolicyAcknowledgementState();
 const installPolicyAcknowledgements = installPolicyAcknowledgementState.records;
 const pendingPluginLifecycleOperations = resolveGlobalSet<Promise<unknown>>(
   Symbol.for("openclaw.pendingPluginLifecycleOperations"),

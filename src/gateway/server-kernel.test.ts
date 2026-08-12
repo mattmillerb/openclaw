@@ -13,6 +13,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { getInstallPolicyAcknowledgementState } from "./plugin-install-policy-acknowledgement-state.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -181,6 +182,11 @@ describe("createGatewayKernel", () => {
         "gateway.handlers",
         "gateway.request-context",
       ]);
+
+      const installPolicyGeneration = getInstallPolicyAcknowledgementState().generation;
+      const closePrelude = kernel.beginClosePrelude();
+      expect(getInstallPolicyAcknowledgementState().generation).toBe(installPolicyGeneration + 1);
+      await closePrelude;
     } finally {
       try {
         await kernel?.closeOnStartupFailure();
