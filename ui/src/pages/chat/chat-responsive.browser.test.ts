@@ -954,6 +954,38 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("anchors the mobile session companion above the measured composer dock", async () => {
+    const page = await openBrowserPage(393, 852);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="shell shell--chat">
+            <main class="content content--chat">
+              <div class="chat-main" style="--chat-bottom-dock-height: 180px; height: 852px">
+                <div class="chat-session-rail chat-session-rail--pill">Reviewing the session</div>
+              </div>
+            </main>
+          </div>
+        </body></html>`,
+      );
+
+      const offsets = await page.evaluate(() => {
+        const companion = document.querySelector<HTMLElement>(".chat-session-rail--pill");
+        if (!companion) {
+          throw new Error("session companion missing");
+        }
+        return {
+          computed: Number.parseFloat(getComputedStyle(companion).bottom),
+          visible: window.innerHeight - companion.getBoundingClientRect().bottom,
+        };
+      });
+      expect(offsets.computed).toBeCloseTo(192, 0);
+      expect(offsets.visible).toBeGreaterThan(180);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps the split-pane close button reachable as the pane narrows", async () => {
     const page = await openBrowserPage(1100, 240);
     try {

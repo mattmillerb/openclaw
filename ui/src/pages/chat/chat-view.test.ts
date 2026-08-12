@@ -832,11 +832,13 @@ describe("chat Swarm progress", () => {
     });
 
     const widget = container.querySelector("[data-test-id=chat-swarm]");
+    const dock = widget?.closest(".chat-bottom-dock");
     expect(widget).not.toBeNull();
-    const scrollAnchor = widget?.previousElementSibling;
+    expect(dock).not.toBeNull();
+    const scrollAnchor = dock?.previousElementSibling;
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
     expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(dock?.lastElementChild?.classList.contains("agent-chat__composer-shell")).toBe(true);
     expect(container.querySelector(".chat-swarm__dot--running")?.getAttribute("title")).toBe(
       "Worker A: Running",
     );
@@ -868,8 +870,9 @@ describe("inline approval card", () => {
 
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
     const inlineSurface = container.querySelector(".chat-inline-approval");
+    const dock = inlineSurface?.closest(".chat-bottom-dock");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
-    expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(dock?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
     expect(
       inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
     ).toBe(true);
@@ -1593,13 +1596,14 @@ describe("chat scroll-to-bottom affordance", () => {
 
     const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
     const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
+    const dock = wrapper?.nextElementSibling;
     expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
     expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(wrapper?.nextElementSibling?.classList.contains("chat-inline-approval")).toBe(true);
+    expect(dock?.classList.contains("chat-bottom-dock")).toBe(true);
     for (const surface of container.querySelectorAll(
       ".chat-inline-approval, .chat-queue, .agent-chat__composer-shell",
     )) {
-      expect(wrapper?.compareDocumentPosition(surface) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(dock?.contains(surface)).toBe(true);
     }
     expect(button?.textContent?.trim()).toBe("");
     expect(container.querySelector(".chat-new-messages")).toBeNull();
@@ -1619,8 +1623,10 @@ describe("chat scroll-to-bottom affordance", () => {
     });
 
     const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
+    const dock = container.querySelector(".chat-bottom-dock");
     const queue = container.querySelector(".chat-queue");
-    expect(wrapper?.nextElementSibling).toBe(queue);
+    expect(wrapper?.nextElementSibling).toBe(dock);
+    expect(queue?.parentElement).toBe(dock);
     expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
   });
 
