@@ -125,6 +125,12 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   return metadata;
 }
 
+/** Codex serializes a native child identity as a flat optional `agent_id`. */
+export function readCodexNativeAgentId(rawPayload: JsonValue): string | undefined {
+  const payload = isJsonObject(rawPayload) ? rawPayload : {};
+  return readOptionalNonEmptyString(payload.agent_id);
+}
+
 function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
