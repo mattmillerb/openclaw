@@ -5921,6 +5921,7 @@ public struct SessionRow: Codable, Sendable {
     public let lastinteractionat: Double?
     public let status: AnyCodable?
     public let lastrunerror: String?
+    public let restartrecoverystatus: String?
     public let activeleafentryid: AnyCodable?
     public let spawnedby: String?
     public let parentsessionkey: String?
@@ -5983,6 +5984,7 @@ public struct SessionRow: Codable, Sendable {
         lastinteractionat: Double? = nil,
         status: AnyCodable? = nil,
         lastrunerror: String? = nil,
+        restartrecoverystatus: String? = nil,
         activeleafentryid: AnyCodable? = nil,
         spawnedby: String? = nil,
         parentsessionkey: String? = nil,
@@ -6044,6 +6046,7 @@ public struct SessionRow: Codable, Sendable {
         self.lastinteractionat = lastinteractionat
         self.status = status
         self.lastrunerror = lastrunerror
+        self.restartrecoverystatus = restartrecoverystatus
         self.activeleafentryid = activeleafentryid
         self.spawnedby = spawnedby
         self.parentsessionkey = parentsessionkey
@@ -6107,6 +6110,7 @@ public struct SessionRow: Codable, Sendable {
         case lastinteractionat = "lastInteractionAt"
         case status
         case lastrunerror = "lastRunError"
+        case restartrecoverystatus = "restartRecoveryStatus"
         case activeleafentryid = "activeLeafEntryId"
         case spawnedby = "spawnedBy"
         case parentsessionkey = "parentSessionKey"
@@ -8263,6 +8267,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let parentsessionkey: String?
     public let spawndepth: Int?
     public let fork: Bool?
+    public let recover: Bool?
     public let emitcommandhooks: Bool?
     public let succeedsparent: Bool?
     public let task: String?
@@ -8287,6 +8292,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String? = nil,
         spawndepth: Int? = nil,
         fork: Bool? = nil,
+        recover: Bool? = nil,
         emitcommandhooks: Bool? = nil,
         succeedsparent: Bool? = nil,
         task: String? = nil,
@@ -8310,6 +8316,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.parentsessionkey = parentsessionkey
         self.spawndepth = spawndepth
         self.fork = fork
+        self.recover = recover
         self.emitcommandhooks = emitcommandhooks
         self.succeedsparent = succeedsparent
         self.task = task
@@ -8335,6 +8342,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case parentsessionkey = "parentSessionKey"
         case spawndepth = "spawnDepth"
         case fork
+        case recover
         case emitcommandhooks = "emitCommandHooks"
         case succeedsparent = "succeedsParent"
         case task
