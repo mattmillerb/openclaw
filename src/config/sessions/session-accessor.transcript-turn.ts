@@ -213,8 +213,8 @@ async function persistExpectedSessionTranscriptTurn(
     expectedSessionId: string;
   },
 ): Promise<SessionTranscriptTurnPersistResult> {
-  const sessionKey = scope.sessionKey?.trim();
-  if (!scope.storePath || !sessionKey) {
+  const requestedSessionKey = scope.sessionKey?.trim();
+  if (!scope.storePath || !requestedSessionKey) {
     throw new Error("Cannot guard a transcript turn without a session store and key");
   }
   const storePath = scope.storePath;
@@ -222,12 +222,20 @@ async function persistExpectedSessionTranscriptTurn(
   const agentId =
     scope.agentId ??
     resolveAgentIdFromSessionKey(
-      sessionKey,
+      requestedSessionKey,
       resolveDefaultAgentId(options.config ?? getRuntimeConfig()),
     );
   if (!agentId) {
-    throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
+    throw new Error(`Cannot resolve transcript turn without an agent id: ${requestedSessionKey}`);
   }
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    sessionId: expectedSessionId,
+    sessionKey: requestedSessionKey,
+    storePath,
+  });
+  const sessionKey = runtimeTarget.sessionKey;
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
     : resolveSessionEntrySelection({
@@ -288,8 +296,13 @@ async function persistExpectedSessionTranscriptTurn(
     };
   }
 
+  // The requested key remains the caller's live update route; the resolved
+  // target above is the distinct physical SQLite owner.
   await publishTranscriptTurnUpdate({
-    target,
+    target:
+      requestedSessionKey === target.sessionKey
+        ? target
+        : { ...target, sessionKey: requestedSessionKey },
     sessionEntry: turn.sessionEntry,
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
@@ -334,16 +347,17 @@ async function resolveTranscriptTurnTarget(
       agentId,
       env: scope.env,
     });
-  const runtimeTarget = scope.sessionStore
-    ? undefined
-    : await resolveSessionTranscriptRuntimeTarget({
-        agentId,
-        ...(scope.env ? { env: scope.env } : {}),
-        sessionId: scope.sessionId,
-        sessionKey,
-        storePath,
-      });
-  const resolvedSessionKey = runtimeTarget?.sessionKey ?? sessionKey;
+  // A caller snapshot may retain the routing key that admitted the turn. The
+  // persisted window owns durable writes; resolving it is read-only, so a
+  // memory-only mirror still avoids materializing SQLite state.
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    sessionId: scope.sessionId,
+    sessionKey,
+    storePath,
+  });
+  const resolvedSessionKey = runtimeTarget.sessionKey;
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: resolvedSessionKey })
     : undefined;
@@ -355,11 +369,11 @@ async function resolveTranscriptTurnTarget(
     sessionKey: resolvedSessionKey,
     storePath,
   });
-  const sessionEntry = resolved?.existing ?? scope.sessionEntry ?? persistedEntry;
+  const sessionEntry = persistedEntry ?? resolved?.existing ?? scope.sessionEntry;
   return {
     agentId,
     sessionId: scope.sessionId,
-    sessionKey: runtimeTarget?.sessionKey ?? resolved?.normalizedKey ?? resolvedSessionKey,
+    sessionKey: runtimeTarget.sessionKey,
     storePath,
     sessionEntry,
     entryFromPersistedStore: persistedEntry != null,

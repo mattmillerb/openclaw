@@ -7077,6 +7077,58 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(getTotalPendingReplies()).toBe(0);
   });
 
+  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
+    createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
+    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
+    const staleSessionKey = "agent:main:stale-transcript-owner";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: canonicalSessionKey,
+        storePath: mockState.storePath,
+      },
+      { sessionId: mockState.sessionId, updatedAt: 1 },
+    );
+    mockState.finalText = "ok";
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-transcript-owner",
+      message: "keep this Gateway turn",
+      sessionKey: staleSessionKey,
+      expectBroadcast: false,
+    });
+
+    const persistedEvents = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: canonicalSessionKey,
+      storePath: mockState.storePath,
+    });
+    expect(persistedEvents).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "keep this Gateway turn",
+        }),
+      }),
+    );
+    expect(
+      loadSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: staleSessionKey,
+        storePath: mockState.storePath,
+      }),
+    ).toBeUndefined();
+    expect(findUserUpdate()?.target).toEqual({
+      agentId: "main",
+      sessionId: mockState.sessionId,
+      sessionKey: staleSessionKey,
+      storePath: mockState.storePath,
+    });
+  });
+
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-user-transcript-error-no-run-");
     mockState.dispatchError = new Error("upstream unavailable");
