@@ -15,6 +15,7 @@ import {
 } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
+  clearAuthProfileCooldown,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -23,6 +24,7 @@ import {
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
+  setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import {
   listProviderEnvAuthLookupKeys,
@@ -265,6 +267,7 @@ function mapProvider(
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
+  store: AuthProfileStore,
 ): ModelAuthStatusProvider {
   const usageProfile =
     prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
@@ -282,24 +285,52 @@ function mapProvider(
   const hasRefreshableProfile = prov.profiles.some(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
+  const authProvider = resolveProviderIdForAuth(prov.provider);
+  const profileOrder = findNormalizedProviderValue(store.order, authProvider);
   return {
     provider: prov.provider,
     displayName: providerDisplayName(prov.provider),
     status:
       apiKey && !hasRefreshableProfile && rollup.status === "missing" ? "static" : rollup.status,
     expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt),
-    profiles: prov.profiles.map((prof) => ({
-      profileId: prof.profileId,
-      type: prof.type,
-      status: prof.status,
-      reasonCode: prof.reasonCode,
-      expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
-      ...((prof.type === "oauth" || prof.type === "token") &&
-      logoutProfileIds.has(prof.profileId) &&
-      !configBoundProfileIds.has(prof.profileId)
-        ? { logoutSupported: true }
-        : {}),
-    })),
+    profiles: prov.profiles.map((prof) => {
+      const credential = store.profiles[prof.profileId];
+      const usageStats = store.usageStats?.[prof.profileId];
+      return {
+        profileId: prof.profileId,
+        type: prof.type,
+        status: prof.status,
+        reasonCode: prof.reasonCode,
+        expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
+        ...(credential?.displayName ? { displayName: credential.displayName } : {}),
+        ...(credential?.email ? { email: credential.email } : {}),
+        ...(usageStats?.lastUsed ? { lastUsedAt: usageStats.lastUsed } : {}),
+        ...(usageStats?.cooldownUntil
+          ? {
+              cooldownUntil: usageStats.cooldownUntil,
+              ...(usageStats.cooldownReason ? { cooldownReason: usageStats.cooldownReason } : {}),
+            }
+          : {}),
+        ...(usageStats?.disabledUntil
+          ? {
+              disabledUntil: usageStats.disabledUntil,
+              ...(usageStats.disabledReason ? { disabledReason: usageStats.disabledReason } : {}),
+            }
+          : {}),
+        ...(usageStats?.blockedUntil
+          ? {
+              blockedUntil: usageStats.blockedUntil,
+              ...(usageStats.blockedReason ? { blockedReason: usageStats.blockedReason } : {}),
+            }
+          : {}),
+        ...((prof.type === "oauth" || prof.type === "token") &&
+        logoutProfileIds.has(prof.profileId) &&
+        !configBoundProfileIds.has(prof.profileId)
+          ? { logoutSupported: true }
+          : {}),
+      };
+    }),
+    ...(profileOrder?.length ? { profileOrder } : {}),
     ...(apiKey ? { apiKey } : {}),
     usage:
       usage && usageKey
@@ -461,6 +492,110 @@ function resolveConfiguredProviders(
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
+  "models.authOrderSet": async ({ params, respond, context }) => {
+    const provider = readProviderParam(params);
+    const profileIds = Array.isArray(params.profileIds)
+      ? [
+          ...new Set(
+            params.profileIds
+              .filter((value): value is string => typeof value === "string")
+              .map((value) => value.trim())
+              .filter(Boolean),
+          ),
+        ]
+      : [];
+    if (!provider || profileIds.length === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "provider and profileIds are required"),
+      );
+      return;
+    }
+    try {
+      const cfg = context.getRuntimeConfig();
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        return;
+      }
+      const store = ensureAuthProfileStore(scope.agentDir, {
+        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
+      });
+      const providerKey = resolveProviderIdForAuth(provider, { config: cfg });
+      const valid = profileIds.every((profileId) => {
+        const credential = store.profiles[profileId];
+        return (
+          credential &&
+          resolveProviderIdForAuth(credential.provider, { config: cfg }) === providerKey
+        );
+      });
+      if (!valid) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "profileIds contain unavailable auth profiles"),
+        );
+        return;
+      }
+      const updated = await setAuthProfileOrder({
+        agentDir: scope.agentDir,
+        provider: providerKey,
+        order: profileIds,
+      });
+      if (!updated) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "failed to update auth profile order"),
+        );
+        return;
+      }
+      invalidateModelAuthStatusCache();
+      respond(true, { provider, profileIds }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "models.authCooldownClear": async ({ params, respond, context }) => {
+    const provider = readProviderParam(params);
+    const profileId = typeof params.profileId === "string" ? params.profileId.trim() : "";
+    if (!provider || !profileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "provider and profileId are required"),
+      );
+      return;
+    }
+    try {
+      const cfg = context.getRuntimeConfig();
+      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        return;
+      }
+      const store = ensureAuthProfileStoreWithoutExternalProfiles(scope.agentDir);
+      const credential = store.profiles[profileId];
+      if (
+        !credential ||
+        resolveProviderIdForAuth(credential.provider, { config: cfg }) !==
+          resolveProviderIdForAuth(provider, { config: cfg })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "profile is unavailable for this provider"),
+        );
+        return;
+      }
+      await clearAuthProfileCooldown({ store, profileId, agentDir: scope.agentDir });
+      invalidateModelAuthStatusCache();
+      respond(true, { provider, profileId }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
   "models.authLogout": async ({ params, respond, context }) => {
     const provider = readProviderParam(params);
     if (!provider) {
@@ -658,6 +793,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
+          store,
         ),
       );
       const result: ModelAuthStatusResult = { ts: now, providers };

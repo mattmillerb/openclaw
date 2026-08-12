@@ -506,6 +506,8 @@ export {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsAuthLogoutParamsSchema,
+  ModelsAuthOrderSetParamsSchema,
+  ModelsAuthCooldownClearParamsSchema,
   ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,

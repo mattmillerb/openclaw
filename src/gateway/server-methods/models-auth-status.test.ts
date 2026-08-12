@@ -45,6 +45,10 @@ const mocks = vi.hoisted(() => ({
   removeProviderAuthProfilesWithLock: vi.fn(
     async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
   ),
+  setAuthProfileOrder: vi.fn(
+    async (): Promise<AuthProfileStore | null> => ({ version: 1, profiles: {} }),
+  ),
+  clearAuthProfileCooldown: vi.fn(async () => undefined),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
@@ -80,6 +84,8 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     listProfilesForProvider: mocks.listProfilesForProvider,
     removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
+    setAuthProfileOrder: mocks.setAuthProfileOrder,
+    clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
     clearRuntimeAuthProfileStoreSnapshots: mocks.clearRuntimeAuthProfileStoreSnapshots,
   };
@@ -137,6 +143,14 @@ const handler = expectDefined(
 const logoutHandler = expectDefined(
   modelsAuthStatusHandlers["models.authLogout"],
   'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+);
+const orderSetHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authOrderSet"],
+  'modelsAuthStatusHandlers["models.authOrderSet"] test invariant',
+);
+const cooldownClearHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authCooldownClear"],
+  'modelsAuthStatusHandlers["models.authCooldownClear"] test invariant',
 );
 
 function createActiveRun(providerId: string, authProviderId?: string, agentId = "main") {
@@ -246,6 +260,8 @@ function resetAuthStatusMocks(): void {
   mocks.listProfilesForProvider.mockReturnValue([]);
   mocks.removeAuthProfilesAcrossOwnerStores.mockResolvedValue(true);
   mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+  mocks.setAuthProfileOrder.mockResolvedValue({ version: 1, profiles: {} });
+  mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
   mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
     (params: { agentDir?: string }) => params.agentDir,
   );
@@ -499,6 +515,90 @@ describe("models.authStatus", () => {
       ).type,
     ).toBe("oauth");
     expect(result.providers[0]?.profiles[0]?.logoutSupported).toBe(true);
+  });
+
+  it("projects non-secret profile identity, priority, and cooldown state", async () => {
+    const health = createOpenAiCodexOauthHealthSummary();
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "secret-access",
+          refresh: "secret-refresh",
+          expires: 1_000_000,
+          email: "operator@example.com",
+          displayName: "Primary",
+        },
+      },
+      order: { openai: ["openai:default"] },
+      usageStats: {
+        "openai:default": {
+          lastUsed: 100,
+          cooldownUntil: 200,
+          cooldownReason: "rate_limit",
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue(health);
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider?.profileOrder).toEqual(["openai:default"]);
+    expect(provider?.profiles[0]).toMatchObject({
+      displayName: "Primary",
+      email: "operator@example.com",
+      lastUsedAt: 100,
+      cooldownUntil: 200,
+      cooldownReason: "rate_limit",
+    });
+    expect(JSON.stringify(provider)).not.toContain("secret-access");
+    expect(JSON.stringify(provider)).not.toContain("secret-refresh");
+  });
+
+  it("sets an agent-scoped provider profile order", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:primary": { type: "token", provider: "openai", token: "one" },
+        "openai:backup": { type: "token", provider: "openai", token: "two" },
+      },
+    });
+    const opts = createOptions({
+      provider: "openai",
+      profileIds: ["openai:primary", "openai:backup"],
+      agentId: "main",
+    });
+
+    await orderSetHandler(opts);
+
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      order: ["openai:primary", "openai:backup"],
+    });
+    expect(firstRespondCall(opts)?.[0]).toBe(true);
+  });
+
+  it("clears transient profile cooldown state", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:primary": { type: "token", provider: "openai", token: "one" },
+      },
+    };
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(store);
+    const opts = createOptions({ provider: "openai", profileId: "openai:primary" });
+
+    await cooldownClearHandler(opts);
+
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store,
+      profileId: "openai:primary",
+      agentDir: "/tmp/agent",
+    });
+    expect(firstRespondCall(opts)?.[0]).toBe(true);
   });
 
   it("does not offer logout for runtime external CLI profiles", async () => {
