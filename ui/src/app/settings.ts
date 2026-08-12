@@ -147,11 +147,6 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
-const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
-export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
-
-export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
-
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -201,7 +196,6 @@ export type UiSettings = {
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
-  chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
@@ -519,7 +513,6 @@ export function loadSettings(): UiSettings {
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
-      chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
@@ -664,8 +657,6 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
-    // Right dock is the default; only the opt-in bottom dock persists.
-    ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
       ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
       : {}),

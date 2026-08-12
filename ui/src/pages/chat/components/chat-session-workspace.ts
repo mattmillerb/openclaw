@@ -11,12 +11,7 @@ import type {
   SessionWorkspaceListResult,
 } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
-import {
-  normalizeChatWorkspaceDock,
-  patchSettings,
-  type ChatWorkspaceDock,
-  type UiSettings,
-} from "../../../app/settings.ts";
+import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -48,15 +43,9 @@ export type SessionWorkspaceProps = {
   loading: boolean;
   error: string | null;
   activeId: string | null;
-  dock: ChatWorkspaceDock;
-  /** Pane too narrow for a side rail: presentation forces the bottom dock
-   * (the persisted dock preference still applies once the pane widens). */
+  /** Pane too narrow for a side rail: presentation forces the bottom dock. */
   narrowLayout: boolean;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
-  onSetDock: (dock: ChatWorkspaceDock) => void;
-  onDockDragStart: (event: PointerEvent) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
@@ -77,9 +66,6 @@ type SessionWorkspaceState = {
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
-  dock: ChatWorkspaceDock;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
@@ -159,11 +145,6 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     browserSearch: "",
     browserSearchTimer: null,
     collapsed: true,
-    // Dock preference is app-wide, seeded from the host's loaded settings;
-    // per-session state just carries it forward.
-    dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
-    dockDragging: false,
-    dockDragZone: null,
     error: null,
     list: null,
     loading: false,
@@ -625,88 +606,6 @@ export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   requestUpdate(state);
 }
 
-function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspaceDock) {
-  const workspace = getWorkspaceState(state);
-  if (workspace.dock !== dock) {
-    workspace.dock = dock;
-    // Keep the host's settings snapshot in step so the next session's
-    // workspace state seeds from the same dock without a storage read.
-    if (state.settings) {
-      state.settings = { ...state.settings, chatWorkspaceDock: dock };
-    }
-    patchSettings({ chatWorkspaceDock: dock });
-  }
-  requestUpdate(state);
-}
-
-/** Drag the rail by its header to re-dock it inside the pane: the right and
- * bottom bands of .chat-workbench are drop zones (mirrors the terminal
- * panel's right/bottom dock). A small threshold keeps plain clicks intact. */
-function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: PointerEvent) {
-  if (event.button !== 0) {
-    return;
-  }
-  const grip = event.currentTarget;
-  if (!(grip instanceof HTMLElement)) {
-    return;
-  }
-  const workbench = grip.closest<HTMLElement>(".chat-workbench");
-  if (!workbench) {
-    return;
-  }
-  const workspace = getWorkspaceState(state);
-  const startX = event.clientX;
-  const startY = event.clientY;
-
-  const resolveZone = (x: number, y: number): ChatWorkspaceDock | null => {
-    const rect = workbench.getBoundingClientRect();
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      return null;
-    }
-    if (y > rect.bottom - rect.height * 0.32) {
-      return "bottom";
-    }
-    return x > rect.right - rect.width * 0.3 ? "right" : null;
-  };
-
-  const handleMove = (move: PointerEvent) => {
-    if (!workspace.dockDragging) {
-      if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
-        return;
-      }
-      workspace.dockDragging = true;
-      workspace.dockDragZone = resolveZone(move.clientX, move.clientY);
-      requestUpdate(state);
-      return;
-    }
-    const zone = resolveZone(move.clientX, move.clientY);
-    if (zone !== workspace.dockDragZone) {
-      workspace.dockDragZone = zone;
-      requestUpdate(state);
-    }
-  };
-  const finish = (apply: boolean) => {
-    grip.removeEventListener("pointermove", handleMove);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    const zone = workspace.dockDragZone;
-    workspace.dockDragging = false;
-    workspace.dockDragZone = null;
-    if (apply && zone) {
-      setSessionWorkspaceDock(state, zone);
-      return;
-    }
-    requestUpdate(state);
-  };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
-
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleMove);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
-}
-
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
   const workspace = getWorkspaceState(state);
   clearWorkspaceSearchTimer(workspace);
@@ -779,13 +678,8 @@ export function createSessionWorkspaceProps(
     loading: workspace.loading,
     error: workspace.error,
     activeId: workspace.activeId,
-    dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
-    dockDragging: workspace.dockDragging,
-    dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
-    onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
-    onDockDragStart: (event) => startSessionWorkspaceDockDrag(state, event),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -960,7 +854,6 @@ export function renderSessionWorkspaceRail(
   }
   // Narrow panes always present the rail as a bottom strip; a side column
   // would crush the thread below its readable minimum.
-  const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
   const terminalButton = sessionWorkspace.onToggleTerminal
     ? html`
         <openclaw-tooltip .content=${t("terminal.toggle")}>
@@ -1293,41 +1186,12 @@ export function renderSessionWorkspaceRail(
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       <div class="chat-workspace-rail__header">
-        <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
-             it (chat-view renders the drop zones while dragging). -->
-        <div
-          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
-            ? ""
-            : "chat-workspace-rail__grip"}"
-          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
-        >
+        <div class="chat-workspace-rail__title">
           <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
           ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
-          ${sessionWorkspace.narrowLayout
-            ? nothing
-            : html`
-                <openclaw-tooltip
-                  .content=${dock === "bottom"
-                    ? t("chat.workspaceFiles.dockRight")
-                    : t("chat.workspaceFiles.dockBottom")}
-                >
-                  <button
-                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
-                    type="button"
-                    aria-label=${dock === "bottom"
-                      ? t("chat.workspaceFiles.dockRight")
-                      : t("chat.workspaceFiles.dockBottom")}
-                    @click=${() =>
-                      sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
-                  >
-                    ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-              `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
               class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
@@ -1349,7 +1213,9 @@ export function renderSessionWorkspaceRail(
               @click=${sessionWorkspace.onToggleCollapsed}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
+                >${sessionWorkspace.narrowLayout
+                  ? icons.panelBottomClose
+                  : icons.panelRightClose}</span
               >
             </button>
           </openclaw-tooltip>
