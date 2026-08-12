@@ -145,7 +145,9 @@ describe("plugin management Gateway handlers", () => {
     await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledOnce());
     await drainGlobalSingletonLifecycleState("restart");
     const list = callHandler("plugins.list", {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(managementMocks.list).not.toHaveBeenCalled();
 
     finishInstall({ plugin: workboard });
@@ -169,7 +171,9 @@ describe("plugin management Gateway handlers", () => {
     const install = callHandler("plugins.install", { source: "official", pluginId: "workboard" });
     await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledOnce());
     const list = callHandler("plugins.list", {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(managementMocks.list).not.toHaveBeenCalled();
 
     failInstall(new Error("install failed"));

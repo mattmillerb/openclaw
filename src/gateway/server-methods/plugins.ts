@@ -64,7 +64,7 @@ async function runTrackedPluginLifecycleOperation<T>(run: () => Promise<T>): Pro
 }
 
 async function waitForPendingPluginLifecycleOperations(): Promise<void> {
-  await Promise.allSettled([...pendingPluginLifecycleOperations]);
+  await Promise.allSettled(pendingPluginLifecycleOperations);
 }
 
 function installPolicyRequestKey(request: PluginsInstallParams): string {
