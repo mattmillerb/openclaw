@@ -61,6 +61,7 @@ import {
   pluginRowKey,
   renderPlugins,
   type InstalledFilter,
+  type InstallOutcomeReconciliation,
   type PluginRowMessage,
   type PluginsTab,
 } from "./view.ts";
@@ -129,6 +130,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private installedFilter: InstalledFilter = "all";
   @state() private debouncedSearchQuery = "";
   @state() private busy: Record<string, boolean> = {};
+  @state() private installOutcomeReconciliations: Record<string, InstallOutcomeReconciliation> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private pendingRemoval: Record<string, boolean> = {};
   @state() private detailPluginId: string | null = null;
@@ -153,6 +155,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
+      this.captureUnknownInstallOutcomes();
       this.result = null;
       this.error = null;
       this.messages = {};
@@ -173,9 +176,11 @@ class PluginsPage extends OpenClawLightDomElement {
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
+      this.clearInstallOutcomeReconciliations();
     },
     onError: (error) => {
       this.error = formatUiError(error);
+      this.failInstallOutcomeReconciliations();
     },
   });
 
@@ -363,10 +368,41 @@ class PluginsPage extends OpenClawLightDomElement {
     void this.configTask.run([null, this.context.runtimeConfig]);
     void this.searchTask.run([null, ""]);
     this.mutationTokens.clear();
-    // A connection-epoch change makes the one-shot approval outcome unknown;
-    // retire its action so reconnect cannot resend a spent or process-stale token.
-    this.messages = Object.fromEntries(
-      Object.entries(this.messages).filter(([, message]) => !message.installPolicyWarning),
+    this.captureUnknownInstallOutcomes();
+  }
+
+  private captureUnknownInstallOutcomes() {
+    // Once an acknowledged request crosses a connection epoch, only a fresh catalog can
+    // prove whether it committed. Keep that safety gate separate from dismissible messages.
+    const nextMessages = { ...this.messages };
+    const nextReconciliations = { ...this.installOutcomeReconciliations };
+    for (const [key, message] of Object.entries(this.messages)) {
+      if (!message.installPolicyWarning) {
+        continue;
+      }
+      if (this.busy[key]) {
+        nextReconciliations[key] = "checking";
+      }
+      delete nextMessages[key];
+    }
+    this.messages = nextMessages;
+    this.installOutcomeReconciliations = nextReconciliations;
+  }
+
+  private clearInstallOutcomeReconciliations() {
+    if (Object.keys(this.installOutcomeReconciliations).length === 0) {
+      return;
+    }
+    this.installOutcomeReconciliations = {};
+  }
+
+  private failInstallOutcomeReconciliations() {
+    const entries = Object.keys(this.installOutcomeReconciliations);
+    if (entries.length === 0) {
+      return;
+    }
+    this.installOutcomeReconciliations = Object.fromEntries(
+      entries.map((key) => [key, "failed" as const]),
     );
   }
 
@@ -570,6 +606,11 @@ class PluginsPage extends OpenClawLightDomElement {
     const client = this.gateway.client;
     if (!client || !this.gateway.connected) {
       return;
+    }
+    if (Object.keys(this.installOutcomeReconciliations).length > 0) {
+      this.installOutcomeReconciliations = Object.fromEntries(
+        Object.keys(this.installOutcomeReconciliations).map((key) => [key, "checking" as const]),
+      );
     }
     this.error = null;
     await this.catalogTask.run([client]);
@@ -1027,6 +1068,7 @@ class PluginsPage extends OpenClawLightDomElement {
           searchLoading: this.searchLoading,
           searchError: this.searchError,
           busy: this.busy,
+          installOutcomeReconciliations: this.installOutcomeReconciliations,
           messages: this.messages,
           pendingRemoval: this.pendingRemoval,
           detailPluginId: this.detailPluginId,
@@ -1052,6 +1094,7 @@ class PluginsPage extends OpenClawLightDomElement {
             void this.updateEnabled(pluginId, enabled, rowKey),
           onInstall: (rowKey, request) => void this.install(rowKey, request),
           onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
+          onRetryInstallOutcome: () => void this.refreshCatalog(),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
           onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),

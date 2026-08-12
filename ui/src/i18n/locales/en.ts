@@ -2794,6 +2794,7 @@ export const en: TranslationMap = {
     unavailable: "Unavailable",
     install: "Install",
     installing: "Installing…",
+    checkingInstallOutcome: "Checking…",
     installNamed: "Install {name}",
     acknowledgeRisk: "Acknowledge risk and install",
     defaultRiskWarning: "Review the ClawHub warning before installing this plugin.",
@@ -2806,6 +2807,10 @@ export const en: TranslationMap = {
     policyReviewSeverityCritical: "Critical",
     policyReviewTechnicalDetails: "Details",
     installAnyway: "Install anyway",
+    installOutcomeChecking:
+      "The Gateway connection changed before OpenClaw confirmed this install. Checking plugin status…",
+    installOutcomeFailed:
+      "OpenClaw couldn’t confirm whether this plugin was installed. Retry the status check before installing again.",
     connectToChange: "Connect to the gateway to change plugins.",
     adminRequired: "Browsing only. Plugin changes require operator.admin access.",
     changesDisabled: "Browsing only. This gateway does not allow plugin changes.",

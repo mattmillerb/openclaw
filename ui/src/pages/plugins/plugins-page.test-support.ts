@@ -20,6 +20,7 @@ import {
 } from "../../test-helpers/application-context.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import type { PluginRowMessage } from "./view.ts";
+import type { InstallOutcomeReconciliation } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
@@ -35,11 +36,13 @@ type TestPluginsPage = HTMLElement & {
   result: PluginListResult | null;
   loading: boolean;
   busy: Record<string, boolean>;
+  installOutcomeReconciliations: Record<string, InstallOutcomeReconciliation>;
   messages: Record<string, PluginRowMessage>;
   activeTab: "installed" | "discover";
   searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
   install: (rowKey: string, request: PluginInstallRequest) => Promise<void>;
+  refreshCatalog: () => Promise<void>;
   updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };

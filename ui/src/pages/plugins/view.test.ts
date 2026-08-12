@@ -46,6 +46,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     searchLoading: false,
     searchError: null,
     busy: {},
+    installOutcomeReconciliations: {},
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
@@ -66,6 +67,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
     onDismissMessage: () => undefined,
+    onRetryInstallOutcome: () => undefined,
     onRequestUninstall: () => undefined,
     onCancelUninstall: () => undefined,
     onUninstall: () => undefined,
@@ -762,6 +764,37 @@ describe("renderPlugins", () => {
       ...request,
       installPolicyWarningAcknowledgement: "approval-token",
     });
+  });
+
+  it("blocks a repeated install while its reconnect outcome is unresolved", () => {
+    const plugin = createPlugin({
+      id: "lobster",
+      name: "Lobster",
+      installed: false,
+      enabled: false,
+      state: "disabled",
+      install: { source: "clawhub", packageName: "@openclaw/lobster" },
+    });
+    const key = pluginRowKey(plugin.id);
+    const onRetryInstallOutcome = vi.fn();
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        result: createResult([plugin]),
+        installOutcomeReconciliations: { [key]: "failed" },
+        onRetryInstallOutcome,
+      }),
+    );
+
+    const row = container.querySelector<HTMLElement>('[data-plugin-id="lobster"]');
+    expect(normalizedText(row?.querySelector('[role="alert"]') ?? null)).toContain(
+      "couldn’t confirm whether this plugin was installed",
+    );
+    const install = actionButton(row ?? container, "Install Lobster");
+    expect(install?.disabled).toBe(true);
+    expect(normalizedText(install)).toBe("Checking…");
+    row?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(onRetryInstallOutcome).toHaveBeenCalledOnce();
   });
 
   it("keeps the not-installed outcome visible for reason-only policy warnings", () => {

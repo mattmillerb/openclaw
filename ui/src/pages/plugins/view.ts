@@ -55,6 +55,8 @@ export type PluginRowMessage = {
   };
 };
 
+export type InstallOutcomeReconciliation = "checking" | "failed";
+
 type PluginInstallPolicyFinding = NonNullable<
   PluginInstallPolicyWarningDetails["findings"]
 >[number];
@@ -84,6 +86,7 @@ type PluginsViewProps = {
   searchLoading: boolean;
   searchError: string | null;
   busy: Readonly<Record<string, boolean>>;
+  installOutcomeReconciliations: Readonly<Record<string, InstallOutcomeReconciliation>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
@@ -104,6 +107,7 @@ type PluginsViewProps = {
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
   onDismissMessage: (rowKey: string) => void;
+  onRetryInstallOutcome: () => void;
   onRequestUninstall: (rowKey: string) => void;
   onCancelUninstall: (rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
@@ -398,6 +402,28 @@ function renderRowMessage(
   busy: boolean,
   props: PluginsViewProps,
 ) {
+  const installOutcome = props.installOutcomeReconciliations[key];
+  if (installOutcome) {
+    return html`
+      <div
+        class="plugins-row-message plugins-row-message--warning"
+        role=${installOutcome === "failed" ? "alert" : "status"}
+      >
+        <span>
+          ${t(
+            installOutcome === "failed"
+              ? "pluginsPage.installOutcomeFailed"
+              : "pluginsPage.installOutcomeChecking",
+          )}
+        </span>
+        ${installOutcome === "failed"
+          ? html`<button type="button" class="btn btn--sm" @click=${props.onRetryInstallOutcome}>
+              ${t("common.retry")}
+            </button>`
+          : nothing}
+      </div>
+    `;
+  }
   if (!message) {
     return nothing;
   }
@@ -608,7 +634,11 @@ function renderInstallButton(
         props.onInstall(key, request);
       }}
     >
-      ${busy ? t("pluginsPage.installing") : t("pluginsPage.install")}
+      ${busy
+        ? props.installOutcomeReconciliations[key]
+          ? t("pluginsPage.checkingInstallOutcome")
+          : t("pluginsPage.installing")
+        : t("pluginsPage.install")}
     </button>
   `;
 }
@@ -734,7 +764,7 @@ function renderPluginRow(
   includePackageName = false,
 ): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key] ?? false;
+  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
   return html`
     <article
       class="settings-row plugins-item plugins-item--clickable"
@@ -913,7 +943,7 @@ function renderConnectorRow(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = props.busy[key] ?? false;
+  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -1000,7 +1030,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = props.busy[key] ?? false;
+  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1173,7 +1203,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key] ?? false;
+  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
   return html`
     <openclaw-modal-dialog
       label=${plugin.name}

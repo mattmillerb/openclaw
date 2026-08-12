@@ -201,8 +201,9 @@ describe("PluginsPage", () => {
     );
   });
 
-  it("retires a pending install-policy review across a same-client reconnect", async () => {
+  it("reconciles a pending install-policy retry before allowing another install", async () => {
     const retry = deferred<PluginMutationResult>();
+    const catalogRefresh = deferred<PluginListResult>();
     let installCalls = 0;
     const { client, request } = createClient(async (method) => {
       if (method === "plugins.install") {
@@ -224,7 +225,7 @@ describe("PluginsPage", () => {
         return retry.promise;
       }
       if (method === "plugins.list") {
-        return createResult();
+        return catalogRefresh.promise;
       }
       throw new Error(`Unexpected method ${method}`);
     });
@@ -252,11 +253,24 @@ describe("PluginsPage", () => {
       expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2),
     );
     expect(page.messages[rowKey]?.installPolicyWarning).toBeDefined();
+    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
     harness.emit(client, false);
     harness.emit(client, true);
-    await page.updateComplete;
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(1),
+    );
     expect(page.messages[rowKey]).toBeUndefined();
+    expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
+    expect(page.installOutcomeReconciliations[rowKey]).toBe("checking");
+
+    catalogRefresh.resolve(
+      createResult(
+        createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
+      ),
+    );
+    await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined());
+    expect(page.result?.plugins[0]?.installed).toBe(true);
 
     retry.resolve({
       ok: true,
@@ -265,6 +279,73 @@ describe("PluginsPage", () => {
     });
     await pendingRetry;
     expect(page.messages[rowKey]).toBeUndefined();
+    expect(page.result?.plugins[0]?.installed).toBe(true);
+  });
+
+  it("keeps an unknown install outcome blocked until a failed catalog check is retried", async () => {
+    const retry = deferred<PluginMutationResult>();
+    let installCalls = 0;
+    let listCalls = 0;
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.install") {
+        installCalls += 1;
+        if (installCalls === 1) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "install requires review",
+            details: {
+              installPolicyCode: "install_policy_warning_acknowledgement_required",
+              targetName: "@openclaw/lobster",
+              targetType: "plugin",
+              requestMode: "install",
+              reason: "Review this plugin.",
+              acknowledgementToken: "approval-token",
+            },
+          });
+        }
+        return retry.promise;
+      }
+      if (method === "plugins.list") {
+        listCalls += 1;
+        if (listCalls === 1) {
+          throw new Error("catalog unavailable");
+        }
+        return createResult(
+          createPlugin({
+            id: "lobster",
+            name: "Lobster",
+            installed: false,
+            install: { source: "clawhub", packageName: "@openclaw/lobster" },
+          }),
+        );
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
+    );
+    const rowKey = "plugin:@openclaw/lobster";
+    const installRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/lobster",
+    } satisfies PluginInstallRequest;
+
+    await page.install(rowKey, installRequest);
+    void page.install(rowKey, {
+      ...installRequest,
+      installPolicyWarningAcknowledgement: "approval-token",
+    });
+    await waitForFast(() => expect(installCalls).toBe(2));
+
+    harness.emit(client, false);
+    harness.emit(client, true);
+    await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBe("failed"));
+
+    await page.refreshCatalog();
+    expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined();
+    expect(page.result?.plugins[0]?.installed).toBe(false);
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {

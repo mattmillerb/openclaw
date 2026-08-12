@@ -813,7 +813,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
-  it("retires a pending install-policy review after reconnect", async () => {
+  it("reconciles a pending install-policy review before allowing another install", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -844,6 +844,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await waitForNextRequest(gateway, "plugins.install", installCountBeforeRetry);
       await review.getByRole("button", { name: "Installing…", exact: true }).waitFor();
 
+      await gateway.deferNext("plugins.list");
       const socketsBeforeReconnect = await gateway.getSocketCount();
       await gateway.closeLatest(1001, "install-policy reconnect proof");
       await expect
@@ -851,10 +852,42 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .toBeGreaterThan(socketsBeforeReconnect);
 
       await review.waitFor({ state: "detached" });
-      await row.getByRole("button", { name: "Install Lobster", exact: true }).waitFor();
+      await row.getByText("Checking plugin status…", { exact: false }).waitFor();
+      const blockedInstall = row.getByRole("button", { name: "Install Lobster", exact: true });
+      expect(await blockedInstall.isDisabled()).toBe(true);
       expect(await row.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
         0,
       );
+      expect((await gateway.getRequests("plugins.install")).length).toBe(2);
+
+      await gateway.rejectDeferred("plugins.list", {
+        code: "UNAVAILABLE",
+        message: "catalog unavailable",
+      });
+      await row
+        .getByText("couldn’t confirm whether this plugin was installed", {
+          exact: false,
+        })
+        .waitFor();
+      expect(await blockedInstall.isDisabled()).toBe(true);
+
+      const listCountBeforeRetry = (await gateway.getRequests("plugins.list")).length;
+      await gateway.deferNext("plugins.list");
+      await row.getByRole("button", { name: "Retry", exact: true }).click();
+      await waitForNextRequest(gateway, "plugins.list", listCountBeforeRetry);
+      await gateway.resolveDeferred(
+        "plugins.list",
+        inventory([workboardDisabled, installedLobsterPlugin, remoteIconPlugin]),
+      );
+      await row.getByRole("button", { name: "Disable", exact: true }).waitFor();
+      expect(await row.getByText("couldn’t confirm", { exact: false }).count()).toBe(0);
+
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: installedLobsterPlugin,
+        restartRequired: true,
+      } satisfies PluginMutationResult);
+      await row.getByRole("button", { name: "Disable", exact: true }).waitFor();
     } finally {
       await context.close();
     }
