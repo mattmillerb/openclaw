@@ -202,7 +202,9 @@ suite.define(() => {
           0,
         );
 
-        await scrollToLatest.click();
+        // The proof intentionally keeps the toast visible; force the semantic
+        // action so its overlay cannot make the scroll assertion timing-sensitive.
+        await scrollToLatest.click({ force: true });
         await expect
           .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
           .toBeLessThanOrEqual(8);
