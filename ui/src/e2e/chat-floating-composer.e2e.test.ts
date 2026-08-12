@@ -125,16 +125,16 @@ suite.define(() => {
         await dock.waitFor({ state: "visible" });
         const readDockLayout = () =>
           conversation.evaluate((element) => {
-            const thread = element.querySelector<HTMLElement>(".chat-thread");
-            const dock = element.querySelector<HTMLElement>(".chat-bottom-dock");
+            const threadElement = element.querySelector<HTMLElement>(".chat-thread");
+            const dockElement = element.querySelector<HTMLElement>(".chat-bottom-dock");
             const button = element.querySelector<HTMLElement>(".chat-scroll-to-bottom");
             const toast = document.querySelector<HTMLElement>(".app-toast");
-            if (!thread || !dock || !toast) {
+            if (!threadElement || !dockElement || !toast) {
               throw new Error("expected transcript, composer dock, and toast");
             }
             const conversationRect = element.getBoundingClientRect();
-            const threadRect = thread.getBoundingClientRect();
-            const dockRect = dock.getBoundingClientRect();
+            const threadRect = threadElement.getBoundingClientRect();
+            const dockRect = dockElement.getBoundingClientRect();
             const buttonRect = button?.getBoundingClientRect();
             const toastRect = toast.getBoundingClientRect();
             return {
@@ -142,7 +142,7 @@ suite.define(() => {
               dockBottom: dockRect.bottom,
               dockHeight: dockRect.height,
               dockTop: dockRect.top,
-              paddingBottom: Number.parseFloat(getComputedStyle(thread).paddingBottom),
+              paddingBottom: Number.parseFloat(getComputedStyle(threadElement).paddingBottom),
               threadBottom: threadRect.bottom,
               toastGap: dockRect.top - toastRect.bottom,
               viewportBottom: conversationRect.bottom,
@@ -212,14 +212,14 @@ suite.define(() => {
         const composerAdjuncts = page.locator(".chat-composer-adjuncts");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(26);
         const overflowLayout = await conversation.evaluate((element) => {
-          const dock = element.querySelector<HTMLElement>(".chat-bottom-dock");
+          const dockElement = element.querySelector<HTMLElement>(".chat-bottom-dock");
           const adjuncts = element.querySelector<HTMLElement>(".chat-composer-adjuncts");
           const composer = element.querySelector<HTMLElement>(".agent-chat__composer-shell");
-          if (!dock || !adjuncts || !composer) {
+          if (!dockElement || !adjuncts || !composer) {
             throw new Error("expected dock, composer adjuncts, and composer");
           }
           const conversationRect = element.getBoundingClientRect();
-          const dockRect = dock.getBoundingClientRect();
+          const dockRect = dockElement.getBoundingClientRect();
           const composerRect = composer.getBoundingClientRect();
           return {
             adjunctClientHeight: adjuncts.clientHeight,
