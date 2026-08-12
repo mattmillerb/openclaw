@@ -7,6 +7,7 @@ import type {
   InstallPolicyWarningOccurrence,
 } from "../../plugins/install-security-scan.types.js";
 import { parseInstallPolicyResponse } from "../../security/install-policy-response.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 
 type InstallPolicyWarningScanIdentity = InstallPolicyWarningOccurrence["scan"];
 type ManagementServiceModule = typeof import("../../plugins/management-service.js");
@@ -553,6 +554,47 @@ describe("plugin management Gateway handlers", () => {
     });
 
     expect(retryAfterMismatch.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("expired or does not match this plugin"),
+    });
+    expect(managementMocks.install).toHaveBeenCalledOnce();
+  });
+
+  it("revokes install-policy acknowledgements when the Gateway restarts", async () => {
+    managementMocks.install.mockRejectedValueOnce(
+      new ManagedPluginLifecycleError("Install requires approval", {
+        installPolicyResolvedRequest: {
+          source: "official",
+          spec: "@openclaw/diffs@1.0.0",
+          pluginId: "diffs",
+          mode: "install",
+        },
+        installPolicyWarning: warningOccurrence({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review required",
+        }),
+      }),
+    );
+    const warning = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    const acknowledgementToken = expectDefined(
+      (warning.error as { details?: { acknowledgementToken?: unknown } }).details
+        ?.acknowledgementToken,
+      "expected install-policy acknowledgement token",
+    );
+
+    await drainGlobalSingletonLifecycleState("restart");
+    const retry = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+      installPolicyWarningAcknowledgement: acknowledgementToken,
+    });
+
+    expect(retry.error).toMatchObject({
       code: "INVALID_REQUEST",
       message: expect.stringContaining("expired or does not match this plugin"),
     });

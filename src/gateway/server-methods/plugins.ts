@@ -27,6 +27,7 @@ import {
   type ManagedPluginInstallRequest,
   type ManagedPluginSourceInstallRequest,
 } from "../../plugins/management-service.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { readInstallPolicyWarningErrorDetails } from "../install-policy-warning-error-details.js";
@@ -43,7 +44,10 @@ type InstallPolicyAcknowledgement = {
   warnings: InstallPolicyWarningOccurrence[];
 };
 
-const installPolicyAcknowledgements = new Map<string, InstallPolicyAcknowledgement>();
+const installPolicyAcknowledgements = resolveGlobalMap<string, InstallPolicyAcknowledgement>(
+  Symbol.for("openclaw.installPolicyAcknowledgements"),
+  "close-and-restart",
+);
 
 function installPolicyRequestKey(request: PluginsInstallParams): string {
   return request.source === "clawhub"
