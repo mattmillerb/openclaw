@@ -1,5 +1,6 @@
 // Shared Vitest child process-group signal forwarding helpers.
 import { execFileSync, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
 
 type VitestProcessSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
 type KillProcess = (pid: number, signal?: VitestProcessSignal | 0) => boolean;
@@ -79,7 +80,6 @@ export function forceKillVitestProcessGroup(
 }
 
 const PROCESS_GROUP_JOIN_TIMEOUT_MS = 1_000;
-const PROCESS_GROUP_INSPECT_TIMEOUT_MS = 1_000;
 
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -101,6 +101,66 @@ function isVitestProcessGroupAlive(target: number, kill: KillProcess) {
   }
 }
 
+function inspectLinuxVitestProcessGroup(processGroupId: number) {
+  let pids: string[];
+  try {
+    pids = fs
+      .readdirSync("/proc")
+      .filter((entry) => /^[1-9]\d*$/.test(entry))
+      .toSorted((left, right) => Number(left) - Number(right));
+  } catch {
+    return { stopped: false, diagnostics: "unavailable" };
+  }
+  let matching = 0,
+    allStopped = true;
+  const diagnostics: string[] = [];
+  for (const pid of pids) {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const prefix = /^([1-9]\d*) \(/.exec(stat);
+      const closingParen = stat.lastIndexOf(") ");
+      const fields = stat
+        .slice(closingParen + 2)
+        .trim()
+        .split(/\s+/);
+      const statPid = Number(prefix?.[1]);
+      const ppid = Number(fields[1]);
+      const pgid = Number(fields[2]);
+      const state = fields[0] ?? "";
+      if (
+        !prefix ||
+        closingParen < prefix[0].length ||
+        statPid !== Number(pid) ||
+        !/^[A-Za-z]$/.test(state) ||
+        !Number.isSafeInteger(ppid) ||
+        ppid < 0 ||
+        !Number.isSafeInteger(pgid) ||
+        pgid < 0
+      ) {
+        return { stopped: false, diagnostics: "unavailable" };
+      }
+      if (pgid !== processGroupId) {
+        continue;
+      }
+      matching += 1;
+      allStopped &&= state === "Z" || state === "X";
+      if (diagnostics.length < 20) {
+        const comm = stat
+          .slice(prefix[0].length, closingParen)
+          .replace(/\p{Cc}+/gu, " ")
+          .trim()
+          .slice(0, 80);
+        diagnostics.push(`pid=${pid} ppid=${ppid} state=${state} comm=${comm}`);
+      }
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        return { stopped: false, diagnostics: "unavailable" };
+      }
+    }
+  }
+  return { stopped: matching > 0 && allStopped, diagnostics: diagnostics.join("; ") || "none" };
+}
+
 export function parseVitestProcessGroupMembers(output: string, processGroupId: number): string {
   const members: string[] = [];
   for (const line of output.split(/\r?\n/)) {
@@ -118,15 +178,12 @@ export function parseVitestProcessGroupMembers(output: string, processGroupId: n
   return members.length > 0 ? members.join("; ") : "none";
 }
 
-function inspectVitestProcessGroup(processGroupId: number, platform: NodeJS.Platform): string {
-  if (platform === "win32") {
-    return "unavailable";
-  }
+function inspectVitestProcessGroup(processGroupId: number): string {
   try {
     const output = execFileSync("ps", ["-axo", "pid=,ppid=,pgid=,stat=,comm="], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
-      timeout: PROCESS_GROUP_INSPECT_TIMEOUT_MS,
+      timeout: PROCESS_GROUP_JOIN_TIMEOUT_MS,
     });
     return parseVitestProcessGroupMembers(output, processGroupId);
   } catch {
@@ -144,11 +201,19 @@ async function joinVitestProcessGroup(
     return;
   }
   forwardSignalToVitestProcessGroup({ child, kill, platform, signal: "SIGKILL" });
+  if (platform === "linux" && inspectLinuxVitestProcessGroup(child.pid!).stopped) {
+    return;
+  }
   const deadlineAt = Date.now() + PROCESS_GROUP_JOIN_TIMEOUT_MS;
   while (isVitestProcessGroupAlive(target, kill)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
-      const members = inspectVitestProcessGroup(child.pid!, platform);
+      const inspection =
+        platform === "linux" ? inspectLinuxVitestProcessGroup(child.pid!) : undefined;
+      if (inspection?.stopped) {
+        return;
+      }
+      const members = inspection?.diagnostics ?? inspectVitestProcessGroup(child.pid!);
       throw new Error(
         `[vitest] process group ${child.pid ?? "unknown"} remained alive ${PROCESS_GROUP_JOIN_TIMEOUT_MS}ms after SIGKILL; members: ${members}.`,
       );
