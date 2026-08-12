@@ -78,6 +78,8 @@ type ModelProvidersViewProps = {
   onRequestLogout: (provider: string) => void;
   onCancelLogout: () => void;
   onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[]) => void;
+  onClearProfileCooldown: (cardId: string, provider: string, profileId: string) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProviderKeyChange: (value: string) => void;
@@ -266,6 +268,120 @@ function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
       <strong
         >${parts.length > 0 ? parts.join(" · ") : t("modelProviders.credentials.none")}</strong
       >
+    </div>
+  `;
+}
+
+function profileLabel(profile: ModelProviderCard["profiles"][number]): string {
+  return profile.displayName || profile.email || profile.profileId;
+}
+
+function orderedProfiles(card: ModelProviderCard) {
+  const explicit = new Map(card.profileOrder.map((profileId, index) => [profileId, index]));
+  return card.profiles.toSorted((left, right) => {
+    const leftIndex = explicit.get(left.profileId) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = explicit.get(right.profileId) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.profileId.localeCompare(right.profileId);
+  });
+}
+
+function renderProfiles(card: ModelProviderCard, props: ModelProvidersViewProps) {
+  const profiles = orderedProfiles(card).filter(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  if (profiles.length === 0) {
+    return nothing;
+  }
+  const busy = Boolean(props.busy[`profiles:${card.id}`]);
+  const message = props.messages[`profiles:${card.id}`];
+  const mutationDisabled = configMutationDisabled(props);
+  return html`
+    <div class="model-providers__profiles">
+      <div class="model-providers__profiles-heading">
+        <div>
+          <strong>${t("modelProviders.profiles.title")}</strong>
+          <span>${t("modelProviders.profiles.subtitle")}</span>
+        </div>
+        <button class="btn btn--sm" ?disabled=${mutationDisabled} @click=${props.onOpenModelSetup}>
+          ${t("modelProviders.profiles.addAccount")}
+        </button>
+      </div>
+      ${profiles.map((profile, index) => {
+        const provider = card.profileProviderIds[profile.profileId] ?? card.id;
+        const cooldownUntil = Math.max(
+          profile.cooldownUntil ?? 0,
+          profile.disabledUntil ?? 0,
+          profile.blockedUntil ?? 0,
+        );
+        const cooldownReason =
+          profile.cooldownReason || profile.disabledReason || profile.blockedReason;
+        return html`
+          <div class="model-providers__profile" data-profile-id=${profile.profileId}>
+            <div class="model-providers__profile-priority">${index + 1}</div>
+            <div class="model-providers__profile-copy">
+              <strong>${profileLabel(profile)}</strong>
+              ${profile.email && profile.displayName
+                ? html`<span>${profile.email}</span>`
+                : html`<span>${profile.profileId}</span>`}
+              ${cooldownUntil > Date.now()
+                ? html`<span class="model-providers__profile-warning">
+                    ${t("modelProviders.profiles.cooldown", {
+                      time: formatTimeMs(cooldownUntil - Date.now()),
+                      reason: cooldownReason ?? t("modelProviders.profiles.unavailable"),
+                    })}
+                  </span>`
+                : profile.lastUsedAt
+                  ? html`<span>
+                      ${t("modelProviders.profiles.lastUsed", {
+                        time: formatTimeMs(Date.now() - profile.lastUsedAt),
+                      })}
+                    </span>`
+                  : nothing}
+            </div>
+            <div class="model-providers__profile-actions">
+              <button
+                class="btn btn--sm"
+                aria-label=${t("modelProviders.profiles.moveUp", {
+                  account: profileLabel(profile),
+                })}
+                ?disabled=${busy || mutationDisabled || index === 0}
+                @click=${() => {
+                  const next = profiles.map((candidate) => candidate.profileId);
+                  [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                  props.onProfileOrderChange(card.id, provider, next);
+                }}
+              >
+                ↑
+              </button>
+              <button
+                class="btn btn--sm"
+                aria-label=${t("modelProviders.profiles.moveDown", {
+                  account: profileLabel(profile),
+                })}
+                ?disabled=${busy || mutationDisabled || index === profiles.length - 1}
+                @click=${() => {
+                  const next = profiles.map((candidate) => candidate.profileId);
+                  [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                  props.onProfileOrderChange(card.id, provider, next);
+                }}
+              >
+                ↓
+              </button>
+              ${cooldownUntil > Date.now()
+                ? html`<button
+                    class="btn btn--sm"
+                    ?disabled=${busy || mutationDisabled}
+                    @click=${() =>
+                      props.onClearProfileCooldown(card.id, provider, profile.profileId)}
+                  >
+                    ${t("modelProviders.profiles.clearCooldown")}
+                  </button>`
+                : nothing}
+            </div>
+          </div>
+        `;
+      })}
+      ${renderMutationMessage(message)}
     </div>
   `;
 }
@@ -464,7 +580,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      ${renderCredentialSummary(card, props.credentialAgentLabel)} ${renderProfiles(card, props)}
       <div class="model-providers__global-metrics">
         <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
         ${card.usage

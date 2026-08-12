@@ -50,6 +50,10 @@ export type ModelProviderCard = {
   displayName: string;
   auth?: ModelProviderAuthSummary;
   profiles: ModelAuthStatusProfile[];
+  /** Exact credential-provider owner for profile-scoped gateway mutations. */
+  profileProviderIds: Record<string, string>;
+  /** Explicit per-agent priority override, in first-choice order. */
+  profileOrder: string[];
   apiKey?: ModelAuthStatusProvider["apiKey"];
   hasConfigApiKey: boolean;
   modelCount: number;
@@ -144,6 +148,8 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       id,
       displayName,
       profiles: [],
+      profileProviderIds: {},
+      profileOrder: [],
       credentialProviderIds: [],
       logoutTargets: [],
       hasConfigApiKey: false,
@@ -278,6 +284,14 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
     });
     draft.card.profiles.push(...provider.profiles);
+    for (const profile of provider.profiles) {
+      draft.card.profileProviderIds[profile.profileId] = provider.provider;
+    }
+    for (const profileId of provider.profileOrder ?? []) {
+      if (!draft.card.profileOrder.includes(profileId)) {
+        draft.card.profileOrder.push(profileId);
+      }
+    }
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
     }

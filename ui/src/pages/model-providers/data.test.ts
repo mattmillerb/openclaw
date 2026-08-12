@@ -110,6 +110,27 @@ describe("buildModelProviderCards", () => {
       plan: "Max",
       windows: [{ label: "5h", usedPercent: 40 }],
     });
+    expect(firstCard(cards).profileProviderIds).toEqual({ p1: "claude-cli" });
+  });
+
+  it("preserves explicit profile priority from auth status", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [
+            { profileId: "openai:primary", type: "oauth", status: "ok" },
+            { profileId: "openai:backup", type: "oauth", status: "ok" },
+          ],
+          profileOrder: ["openai:backup", "openai:primary"],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).profileOrder).toEqual(["openai:backup", "openai:primary"]);
   });
 
   it("merges CLI alias auth rows even when usage enrichment is unavailable", () => {

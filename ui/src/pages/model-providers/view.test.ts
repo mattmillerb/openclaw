@@ -14,6 +14,8 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     id: "openai",
     displayName: "OpenAI",
     profiles: [],
+    profileProviderIds: {},
+    profileOrder: [],
     credentialProviderIds: ["openai"],
     logoutTargets: [],
     hasConfigApiKey: false,
@@ -65,6 +67,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onRequestLogout: () => undefined,
     onCancelLogout: () => undefined,
     onLogout: () => undefined,
+    onProfileOrderChange: () => undefined,
+    onClearProfileCooldown: () => undefined,
     onAddProviderToggle: () => undefined,
     onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
@@ -126,6 +130,55 @@ describe("renderModelProviders", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+  });
+
+  it("renders provider profiles and emits priority and cooldown actions", () => {
+    const onProfileOrderChange = vi.fn();
+    const onClearProfileCooldown = vi.fn();
+    const container = mount(
+      props({
+        cards: [
+          card({
+            profiles: [
+              {
+                profileId: "openai:primary",
+                type: "oauth",
+                status: "ok",
+                displayName: "Primary",
+              },
+              {
+                profileId: "openai:backup",
+                type: "oauth",
+                status: "ok",
+                email: "backup@example.com",
+                cooldownUntil: Date.now() + 60_000,
+                cooldownReason: "rate_limit",
+              },
+            ],
+            profileProviderIds: {
+              "openai:primary": "openai",
+              "openai:backup": "openai",
+            },
+            profileOrder: ["openai:primary", "openai:backup"],
+          }),
+        ],
+        onProfileOrderChange,
+        onClearProfileCooldown,
+      }),
+    );
+
+    expect(text(container)).toContain("Provider profiles");
+    expect(text(container)).toContain("Primary");
+    expect(text(container)).toContain("backup@example.com");
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Move backup@example.com up"]')
+      ?.click();
+    expect(onProfileOrderChange).toHaveBeenCalledWith("openai", "openai", [
+      "openai:backup",
+      "openai:primary",
+    ]);
+    button(container, "Clear cooldown")?.click();
+    expect(onClearProfileCooldown).toHaveBeenCalledWith("openai", "openai", "openai:backup");
   });
 
   it("renders model behavior next to default models and emits canonical values", () => {

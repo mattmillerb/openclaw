@@ -538,6 +538,40 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
+  private async mutateProfile(
+    key: string,
+    method: "models.authOrderSet" | "models.authCooldownClear",
+    params: Record<string, unknown>,
+    success: string,
+  ) {
+    const client = this.context.gateway.snapshot.client;
+    if (!client || !this.canMutate() || this.busy[key]) {
+      return;
+    }
+    const clientEpoch = this.clientEpoch;
+    const agentEpoch = this.agentEpoch;
+    this.setBusy(key, true);
+    this.setMessage(key, null);
+    try {
+      await client.request(method, { ...params, agentId: this.selectedAgentId });
+      if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
+        return;
+      }
+      await this.refresh({ force: true });
+      if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
+        this.setMessage(key, { kind: "success", text: success });
+      }
+    } catch (error) {
+      if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
+        this.setMessage(key, { kind: "error", text: modelProviderErrorMessage(error) });
+      }
+    } finally {
+      if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
+        this.setBusy(key, false);
+      }
+    }
+  }
+
   private async addProvider() {
     const provider = this.addProviderId;
     const apiKey = this.addProviderKey.trim();
@@ -664,6 +698,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onRequestLogout: (provider) => (this.pendingLogoutProvider = provider),
       onCancelLogout: () => (this.pendingLogoutProvider = null),
       onLogout: (cardId, providers) => void this.logout(cardId, providers),
+      onProfileOrderChange: (cardId, provider, profileIds) =>
+        void this.mutateProfile(
+          `profiles:${cardId}`,
+          "models.authOrderSet",
+          { provider, profileIds },
+          t("modelProviders.profiles.orderSaved"),
+        ),
+      onClearProfileCooldown: (cardId, provider, profileId) =>
+        void this.mutateProfile(
+          `profiles:${cardId}`,
+          "models.authCooldownClear",
+          { provider, profileId },
+          t("modelProviders.profiles.cooldownCleared"),
+        ),
       onAddProviderToggle: () => {
         this.addProviderOpen = !this.addProviderOpen;
         this.addProviderKey = "";
