@@ -279,6 +279,7 @@ type ArchiveInstallCall = {
   dangerouslyForceUnsafeInstall?: boolean;
   expectedPluginId?: string;
   onInstallPolicyWarning?: unknown;
+  publicationAuthority?: unknown;
   installPolicyRequest?: {
     kind?: string;
     requestedSpecifier?: string;
@@ -1782,6 +1783,20 @@ describe("installPluginFromClawHub", () => {
     });
 
     expect(archiveInstallCall().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+  });
+
+  it("passes install publication authority through to archive installs", async () => {
+    const publicationAuthority = {
+      assertCurrent: vi.fn(),
+      commit: vi.fn(),
+    };
+
+    await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      publicationAuthority,
+    });
+
+    expect(archiveInstallCall().publicationAuthority).toBe(publicationAuthority);
   });
 
   it("preserves the reviewed policy spec when retrying a pinned ClawHub version", async () => {

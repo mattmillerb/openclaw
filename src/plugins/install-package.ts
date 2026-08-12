@@ -386,16 +386,10 @@ export async function installPluginFromArchive(
       await installPluginFromSourceDir({
         sourceDir,
         ...pickPackageInstallCommonParams({
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          extensionsDir: params.extensionsDir,
+          ...params,
           timeoutMs,
           logger,
           mode,
-          dryRun: params.dryRun,
-          config: params.config,
-          expectedPluginId: params.expectedPluginId,
-          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
           onEffectiveMode: (resolvedMode) => {

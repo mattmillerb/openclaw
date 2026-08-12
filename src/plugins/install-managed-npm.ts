@@ -586,7 +586,6 @@ export async function installPluginFromManagedNpmRoot(
       }
     }
     const result = await installPluginFromInstalledPackageDir({
-      publicationAuthority: params.publicationAuthority,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       config: params.config,

@@ -1040,6 +1040,92 @@ describe("installPluginFromArchive", () => {
     expect(updatedVersion).toBe("0.0.2");
   });
 
+  it("does not publish a new archive install after its approval expires", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "archive-publication-authority.tgz",
+      packageJson: {
+        name: "archive-publication-authority",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    const commit = vi.fn(() => {
+      throw new Error("approval expired");
+    });
+
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+      publicationAuthority: { assertCurrent: vi.fn(), commit },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: approval expired",
+    });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(
+      fs.existsSync(resolvePluginInstallDir("archive-publication-authority", extensionsDir)),
+    ).toBe(false);
+  });
+
+  it("restores an archive update when its approval expires during publication", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const archiveV1 = await ensureDynamicArchiveTemplate({
+      outName: "archive-publication-update-1.tgz",
+      packageJson: {
+        name: "archive-publication-update",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    const archiveV2 = await ensureDynamicArchiveTemplate({
+      outName: "archive-publication-update-2.tgz",
+      packageJson: {
+        name: "archive-publication-update",
+        version: "2.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    const first = await installPluginFromArchive({ archivePath: archiveV1, extensionsDir });
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      return;
+    }
+    let approvalCurrent = true;
+    const assertCurrent = vi.fn(() => {
+      approvalCurrent = false;
+    });
+    const commit = vi.fn(() => {
+      if (!approvalCurrent) {
+        throw new Error("approval expired");
+      }
+    });
+
+    const update = await installPluginFromArchive({
+      archivePath: archiveV2,
+      extensionsDir,
+      mode: "update",
+      publicationAuthority: { assertCurrent, commit },
+    });
+
+    expect(update).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: approval expired",
+    });
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(
+      JSON.parse(fs.readFileSync(path.join(first.targetDir, "package.json"), "utf8")),
+    ).toMatchObject({ version: "1.0.0" });
+  });
+
   it("emits effective install mode when requested archive update creates a new target", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(stateDir, "extensions");
