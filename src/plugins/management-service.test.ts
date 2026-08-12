@@ -237,6 +237,7 @@ describe("plugin management service", () => {
       expect.objectContaining({
         id: "diffs",
         name: "Diffs",
+        packageName: "@openclaw/diffs",
         installed: false,
         featured: true,
         order: 40,

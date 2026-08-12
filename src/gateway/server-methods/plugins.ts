@@ -27,7 +27,7 @@ import {
   type ManagedPluginInstallRequest,
   type ManagedPluginSourceInstallRequest,
 } from "../../plugins/management-service.js";
-import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { readInstallPolicyWarningErrorDetails } from "../install-policy-warning-error-details.js";
@@ -39,15 +39,22 @@ const MAX_INSTALL_POLICY_ACKNOWLEDGEMENTS = 256;
 
 type InstallPolicyAcknowledgement = {
   expiresAt: number;
+  generation: number;
   requestKey: string;
   resolvedRequest: ManagedPluginSourceInstallRequest;
   warnings: InstallPolicyWarningOccurrence[];
 };
 
-const installPolicyAcknowledgements = resolveGlobalMap<string, InstallPolicyAcknowledgement>(
+const installPolicyAcknowledgementState = resolveGlobalSingleton(
   Symbol.for("openclaw.installPolicyAcknowledgements"),
+  () => ({ generation: 0, records: new Map<string, InstallPolicyAcknowledgement>() }),
+  (state) => {
+    state.generation += 1;
+    state.records.clear();
+  },
   "close-and-restart",
 );
+const installPolicyAcknowledgements = installPolicyAcknowledgementState.records;
 const pendingPluginLifecycleOperations = resolveGlobalSet<Promise<unknown>>(
   Symbol.for("openclaw.pendingPluginLifecycleOperations"),
   "close-only",
@@ -94,6 +101,7 @@ function pruneInstallPolicyAcknowledgements(now: number): void {
 }
 
 function issueInstallPolicyAcknowledgement(params: {
+  generation: number;
   request: PluginsInstallParams;
   resolvedRequest: ManagedPluginSourceInstallRequest;
   warning: InstallPolicyWarningOccurrence;
@@ -104,6 +112,7 @@ function issueInstallPolicyAcknowledgement(params: {
   const token = randomUUID();
   installPolicyAcknowledgements.set(token, {
     expiresAt: now + INSTALL_POLICY_ACKNOWLEDGEMENT_TTL_MS,
+    generation: params.generation,
     requestKey: installPolicyRequestKey(params.request),
     resolvedRequest: params.resolvedRequest,
     warnings: [...(params.acknowledgedWarnings ?? []), params.warning],
@@ -113,6 +122,7 @@ function issueInstallPolicyAcknowledgement(params: {
 
 function consumeInstallPolicyAcknowledgement(
   request: PluginsInstallParams,
+  generation: number,
 ): Pick<InstallPolicyAcknowledgement, "resolvedRequest" | "warnings"> | undefined {
   const token = request.installPolicyWarningAcknowledgement;
   if (!token) {
@@ -122,6 +132,8 @@ function consumeInstallPolicyAcknowledgement(
   installPolicyAcknowledgements.delete(token);
   if (
     !acknowledgement ||
+    generation !== installPolicyAcknowledgementState.generation ||
+    acknowledgement.generation !== generation ||
     acknowledgement.expiresAt <= Date.now() ||
     acknowledgement.requestKey !== installPolicyRequestKey(request)
   ) {
@@ -135,8 +147,14 @@ function consumeInstallPolicyAcknowledgement(
   };
 }
 
-function managedInstallRequest(params: PluginsInstallParams): ManagedPluginInstallRequest {
-  const installPolicyWarningAcknowledgement = consumeInstallPolicyAcknowledgement(params);
+function managedInstallRequest(
+  params: PluginsInstallParams,
+  generation: number,
+): ManagedPluginInstallRequest {
+  const installPolicyWarningAcknowledgement = consumeInstallPolicyAcknowledgement(
+    params,
+    generation,
+  );
   if (params.source === "clawhub") {
     return {
       source: params.source,
@@ -248,9 +266,12 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validatePluginsInstallParams, "plugins.install", respond)) {
       return;
     }
+    const acknowledgementGeneration = installPolicyAcknowledgementState.generation;
     try {
       const result = await runTrackedPluginLifecycleOperation(() =>
-        installManagedPlugin({ request: managedInstallRequest(params) }),
+        installManagedPlugin({
+          request: managedInstallRequest(params, acknowledgementGeneration),
+        }),
       );
       respond(
         true,
@@ -264,6 +285,21 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       );
     } catch (error) {
       const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
+      if (
+        lifecycleError?.installPolicyWarning &&
+        lifecycleError.installPolicyResolvedRequest &&
+        acknowledgementGeneration !== installPolicyAcknowledgementState.generation
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Gateway restarted before the install warning could be returned. Retry the install to review the current warning.",
+          ),
+        );
+        return;
+      }
       const trustCode =
         lifecycleError?.code && isClawHubTrustErrorCode(lifecycleError.code)
           ? lifecycleError.code
@@ -281,6 +317,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
               installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
               ...lifecycleError.installPolicyWarning.warning,
               acknowledgementToken: issueInstallPolicyAcknowledgement({
+                generation: acknowledgementGeneration,
                 request: params,
                 resolvedRequest: lifecycleError.installPolicyResolvedRequest,
                 warning: lifecycleError.installPolicyWarning,

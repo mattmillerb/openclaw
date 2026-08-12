@@ -654,6 +654,96 @@ describe("plugin management Gateway handlers", () => {
     expect(managementMocks.install).toHaveBeenCalledOnce();
   });
 
+  it("does not issue an install-policy acknowledgement after the Gateway restarts", async () => {
+    const warningError = () =>
+      new ManagedPluginLifecycleError("Install requires approval", {
+        installPolicyResolvedRequest: {
+          source: "official",
+          spec: "@openclaw/diffs@1.0.0",
+          pluginId: "diffs",
+          mode: "install",
+        },
+        installPolicyWarning: warningOccurrence({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review required",
+        }),
+      });
+    let rejectInstall!: (error: Error) => void;
+    const pendingInstall = new Promise<never>((_resolve, reject) => {
+      rejectInstall = reject;
+    });
+    managementMocks.install
+      .mockReturnValueOnce(pendingInstall)
+      .mockRejectedValueOnce(warningError());
+
+    const pending = callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledOnce());
+    await drainGlobalSingletonLifecycleState("restart");
+    rejectInstall(warningError());
+
+    const stale = await pending;
+    expect(stale.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("Gateway restarted"),
+    });
+    expect(stale.error).not.toHaveProperty("details.acknowledgementToken");
+
+    const fresh = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    expect(
+      (fresh.error as { details?: { acknowledgementToken?: unknown } }).details
+        ?.acknowledgementToken,
+    ).toEqual(expect.any(String));
+  });
+
+  it("rejects a queued install-policy retry when its Gateway generation restarts", async () => {
+    managementMocks.install.mockRejectedValueOnce(
+      new ManagedPluginLifecycleError("Install requires approval", {
+        installPolicyResolvedRequest: {
+          source: "official",
+          spec: "@openclaw/diffs@1.0.0",
+          pluginId: "diffs",
+          mode: "install",
+        },
+        installPolicyWarning: warningOccurrence({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review required",
+        }),
+      }),
+    );
+    const warning = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    const acknowledgementToken = expectDefined(
+      (warning.error as { details?: { acknowledgementToken?: unknown } }).details
+        ?.acknowledgementToken,
+      "expected install-policy acknowledgement token",
+    );
+
+    const retry = callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+      installPolicyWarningAcknowledgement: acknowledgementToken,
+    });
+    await drainGlobalSingletonLifecycleState("restart");
+
+    expect((await retry).error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("expired or does not match this plugin"),
+    });
+    expect(managementMocks.install).toHaveBeenCalledOnce();
+  });
+
   it("carries earlier approvals into a token for a later scan-stage warning", async () => {
     const warning: InstallPolicyWarningDetails = {
       targetName: "demo-plugin",
