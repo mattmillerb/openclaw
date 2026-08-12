@@ -441,10 +441,14 @@ describe("renderPlugins", () => {
     container
       .querySelector<HTMLButtonElement>('[data-plugin-id="tavily"] .plugins-install')
       ?.click();
-    expect(onInstall).toHaveBeenCalledWith(pluginRowKey("tavily"), {
-      source: "official",
-      pluginId: "tavily",
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      pluginRowKey("tavily"),
+      {
+        source: "official",
+        pluginId: "tavily",
+      },
+      pluginRowKey("tavily"),
+    );
   });
 
   it("renders featured plugins newest-featured first", () => {
@@ -578,10 +582,14 @@ describe("renderPlugins", () => {
     expect(normalizedText(result)).toContain("149.3K");
     expect(normalizedText(result)).toContain("Code plugin");
     result?.querySelector<HTMLButtonElement>('[aria-label="Install Calendar Plus"]')?.click();
-    expect(onInstall).toHaveBeenCalledWith(clawHubKey("@openclaw/calendar-plus"), {
-      source: "clawhub",
-      packageName: "@openclaw/calendar-plus",
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      clawHubKey("@openclaw/calendar-plus"),
+      {
+        source: "clawhub",
+        packageName: "@openclaw/calendar-plus",
+      },
+      clawHubKey("@openclaw/calendar-plus"),
+    );
   });
 
   it("keeps discovery available while disabling all read-only mutations", () => {
@@ -654,12 +662,16 @@ describe("renderPlugins", () => {
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
     row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(key, {
-      source: "clawhub",
-      packageName,
-      version: "2.0.0",
-      acknowledgeClawHubRisk: true,
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      key,
+      {
+        source: "clawhub",
+        packageName,
+        version: "2.0.0",
+        acknowledgeClawHubRisk: true,
+      },
+      key,
+    );
   });
 
   it("renders install policy findings with cancel and acknowledged retry actions", () => {
@@ -760,10 +772,14 @@ describe("renderPlugins", () => {
     expect(onDismissMessage).toHaveBeenCalledWith(key);
 
     actionButton(alert, "Install anyway")?.click();
-    expect(onInstall).toHaveBeenCalledWith(key, {
-      ...request,
-      installPolicyWarningAcknowledgement: "approval-token",
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      key,
+      {
+        ...request,
+        installPolicyWarningAcknowledgement: "approval-token",
+      },
+      key,
+    );
   });
 
   it("blocks a repeated install while its reconnect outcome is unresolved", () => {
@@ -819,6 +835,38 @@ describe("renderPlugins", () => {
     );
     row?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
     expect(onRetryInstallOutcome).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a search-only runtime identity when installing", () => {
+    const onInstall = vi.fn();
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "lobster",
+        result: createResult([]),
+        searchResults: [
+          {
+            score: 1,
+            package: {
+              name: "@openclaw/lobster",
+              displayName: "Lobster",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              runtimeId: "lobster",
+            },
+          },
+        ],
+        onInstall,
+      }),
+    );
+
+    actionButton(container, "Install Lobster")?.click();
+    expect(onInstall).toHaveBeenCalledWith(
+      "clawhub:@openclaw/lobster",
+      { source: "clawhub", packageName: "@openclaw/lobster" },
+      "plugin:lobster",
+    );
   });
 
   it("keeps the not-installed outcome visible for reason-only policy warnings", () => {

@@ -230,37 +230,35 @@ describe("PluginsPage", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     const harness = createGateway(client);
-    const lobsterCatalog = createResult(
-      createPlugin({
-        id: "lobster",
-        name: "Lobster",
-        installed: false,
-        install: { source: "clawhub", packageName: "@openclaw/lobster" },
-      }),
-    );
+    const lobsterCatalog = createResult();
     const { page } = await mountPage(
       createContext(harness.gateway),
       createPluginsRouteData(harness.gateway, lobsterCatalog),
     );
-    const rowKey = "plugin:lobster";
+    const rowKey = "clawhub:@openclaw/lobster";
+    const installIdentity = "plugin:lobster";
     const installRequest = {
       source: "clawhub",
       packageName: "@openclaw/lobster",
     } satisfies PluginInstallRequest;
 
-    await page.install(rowKey, installRequest);
+    await page.install(rowKey, installRequest, installIdentity);
     expect(page.messages[rowKey]?.installPolicyWarning?.details.acknowledgementToken).toBe(
       "approval-token",
     );
 
-    const pendingRetry = page.install(rowKey, {
-      ...installRequest,
-      installPolicyWarningAcknowledgement: "approval-token",
-    });
+    const pendingRetry = page.install(
+      rowKey,
+      {
+        ...installRequest,
+        installPolicyWarningAcknowledgement: "approval-token",
+      },
+      installIdentity,
+    );
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2),
     );
-    await page.install("clawhub:@openclaw/lobster", installRequest);
+    await page.install("plugin:lobster", installRequest, installIdentity);
     expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2);
     expect(page.messages[rowKey]?.installPolicyWarning).toBeDefined();
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
@@ -272,7 +270,7 @@ describe("PluginsPage", () => {
     );
     expect(page.messages[rowKey]).toBeUndefined();
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
-    expect(page.installOutcomeReconciliations[rowKey]).toBe("checking");
+    expect(page.installOutcomeReconciliations[installIdentity]).toBe("checking");
 
     retry.resolve({
       ok: true,
@@ -285,7 +283,9 @@ describe("PluginsPage", () => {
         createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
       ),
     );
-    await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined());
+    await waitForFast(() =>
+      expect(page.installOutcomeReconciliations[installIdentity]).toBeUndefined(),
+    );
     expect(page.messages[rowKey]).toBeUndefined();
     expect(page.result?.plugins[0]?.installed).toBe(true);
   });
@@ -349,11 +349,15 @@ describe("PluginsPage", () => {
       packageName: "@openclaw/lobster",
     } satisfies PluginInstallRequest;
 
-    await page.install(rowKey, installRequest);
-    const pendingRetry = page.install(rowKey, {
-      ...installRequest,
-      installPolicyWarningAcknowledgement: "approval-token",
-    });
+    await page.install(rowKey, installRequest, rowKey);
+    const pendingRetry = page.install(
+      rowKey,
+      {
+        ...installRequest,
+        installPolicyWarningAcknowledgement: "approval-token",
+      },
+      rowKey,
+    );
     await waitForFast(() => expect(installCalls).toBe(2));
 
     harness.emit(client, false);
@@ -586,10 +590,14 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install("search:example-plugin", {
-          source: "clawhub",
-          packageName: "example-plugin",
-        } as PluginInstallRequest);
+        await page.install(
+          "search:example-plugin",
+          {
+            source: "clawhub",
+            packageName: "example-plugin",
+          } as PluginInstallRequest,
+          "clawhub:example-plugin",
+        );
       } else if (action === "enable") {
         await page.updateEnabled("workboard", true);
       } else {

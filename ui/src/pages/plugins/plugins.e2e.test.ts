@@ -834,13 +834,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
-      methodResponses: pluginMethodResponses(),
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.list": inventory([workboardDisabled, remoteIconPlugin]),
+        "plugins.search": lobsterSearchResponse,
+      },
     });
 
     try {
       await page.goto(`${server.baseUrl}settings/plugins`);
       await page.getByRole("tab", { name: /^Discover/u }).click();
-      const row = page.locator('[data-plugin-id="lobster"]');
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
+      await gateway.waitForRequest("plugins.search");
+      const row = page.locator('[data-package-name="@openclaw/lobster"]');
       await row.waitFor({ state: "visible" });
 
       await gateway.deferNext("plugins.install");
@@ -876,9 +882,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       expect((await gateway.getRequests("plugins.install")).length).toBe(2);
 
-      await gateway.setMethodResponse("plugins.search", lobsterSearchResponse);
-      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
-      await gateway.waitForRequest("plugins.search");
       const searchRow = page.locator('[data-package-name="@openclaw/lobster"]');
       await searchRow.waitFor({ state: "visible" });
       await searchRow.getByText("Checking plugin status…", { exact: false }).waitFor();

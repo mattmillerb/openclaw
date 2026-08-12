@@ -35,7 +35,6 @@ import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
-  resolvePluginInstallIdentity,
   runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
@@ -838,8 +837,11 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
-    const operationKey = resolvePluginInstallIdentity(request, this.result?.plugins ?? []);
+  private async install(
+    rowKey: string,
+    request: PluginInstallRequest,
+    installIdentity: string,
+  ): Promise<void> {
     await this.runPluginMutation(
       rowKey,
       (client) => installPlugin(client, request),
@@ -880,8 +882,8 @@ class PluginsPage extends OpenClawLightDomElement {
         });
       },
       {
-        operationKey,
-        pendingInstallTarget: operationKey,
+        operationKey: installIdentity,
+        pendingInstallTarget: installIdentity,
         preserveMessageWhilePending: request.installPolicyWarningAcknowledgement !== undefined,
       },
     );
@@ -1114,7 +1116,8 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request) => void this.install(rowKey, request),
+          onInstall: (rowKey, request, installIdentity) =>
+            void this.install(rowKey, request, installIdentity),
           onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onRetryInstallOutcome: () => void this.refreshCatalog(),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
