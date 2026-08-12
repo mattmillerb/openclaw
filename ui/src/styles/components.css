@@ -636,7 +636,13 @@ openclaw-session-owner-chip {
 }
 
 .shell--chat .app-toast {
-  bottom: calc(20px + var(--safe-area-bottom) + var(--chat-active-bottom-dock-height, 0px));
+  /* Keep passive notifications clear of the transcript's semantic
+   * scroll-to-latest control. Both are bottom overlays; without this
+   * clearance the toast's higher stacking layer intercepts the button. */
+  bottom: calc(
+    20px + var(--safe-area-bottom) + var(--chat-active-bottom-dock-height, 0px) +
+      36px + var(--chat-composer-floater-gap)
+  );
 }
 
 /* A corner toast degenerates at phone widths, where it would span nearly the
