@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
 import "./model-providers-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type ModelProvidersPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -21,9 +24,14 @@ type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: DefaultModelSelection | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
+  logout: (cardId: string, provider: string, profileId: string) => Promise<void>;
+  requestProfileLogout: (
+    cardId: string,
+    provider: string,
+    profileId: string,
+    label: string,
+  ) => Promise<void>;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   routeData: ModelProvidersRouteData | undefined;
@@ -423,10 +431,7 @@ describe("ModelProvidersPage agent scope", () => {
     const firstLogout = deferred<unknown>();
     request.mockImplementationOnce(async () => firstLogout.promise);
 
-    const loggingOut = page.logout("openai", [
-      { provider: "openai", profileIds: ["openai:first"] },
-      { provider: "alias", profileIds: ["openai:second"] },
-    ]);
+    const loggingOut = page.logout("openai", "openai", "openai:first");
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.authLogout", {
         provider: "openai",
@@ -446,6 +451,28 @@ describe("ModelProvidersPage agent scope", () => {
     expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toHaveLength(1);
   });
 
+  it("confirms and logs out only the selected profile", async () => {
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.config).toEqual({}));
+    request.mockClear();
+
+    await page.requestProfileLogout("openai", "openai-codex", "openai:work", "Work");
+
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: "Log out account",
+      message: "Log out Work? This removes only this saved profile.",
+      confirmLabel: "Log out",
+      danger: true,
+    });
+    expect(request).toHaveBeenCalledWith("models.authLogout", {
+      provider: "openai-codex",
+      profileIds: ["openai:work"],
+      agentId: "main",
+    });
+  });
+
   it("stops queued agent-scoped logouts when route data changes the selected agent", async () => {
     const { agentSelection, context, request, snapshot } = createHarness("main");
     const page = appendPage(context);
@@ -454,12 +481,8 @@ describe("ModelProvidersPage agent scope", () => {
     const firstLogout = deferred<unknown>();
     request.mockImplementationOnce(async () => firstLogout.promise);
 
-    const loggingOut = page.logout("openai", [
-      { provider: "openai", profileIds: ["openai:first"] },
-      { provider: "alias", profileIds: ["openai:second"] },
-    ]);
+    const loggingOut = page.logout("openai", "openai", "openai:first");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    page.pendingLogoutProvider = "openai";
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {
       openai: { provider: "openai", status: "ok", results: [] },
@@ -473,7 +496,6 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
     expect(page.selectedAgentId).toBe("writer");
     expect(page.busy).toEqual({});
-    expect(page.pendingLogoutProvider).toBeNull();
     expect(page.messages).toEqual({});
     expect(page.probeResults).toEqual({});
     firstLogout.resolve({});

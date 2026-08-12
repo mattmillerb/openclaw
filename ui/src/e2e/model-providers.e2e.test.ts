@@ -181,7 +181,35 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "ok" }],
+              profiles: [
+                {
+                  profileId: "anthropic:personal",
+                  type: "oauth",
+                  status: "ok",
+                  displayName: "Personal",
+                  email: "personal@example.com",
+                  lastUsedAt: NOW - 2 * 60_000,
+                  logoutSupported: true,
+                },
+                {
+                  profileId: "anthropic:work",
+                  type: "oauth",
+                  status: "ok",
+                  displayName: "Work",
+                  email: "work@example.com",
+                  logoutSupported: true,
+                },
+                {
+                  profileId: "anthropic:backup",
+                  type: "oauth",
+                  status: "ok",
+                  displayName: "Backup",
+                  cooldownUntil: NOW + 12 * 60_000,
+                  cooldownReason: "rate_limit",
+                  logoutSupported: true,
+                },
+              ],
+              profileOrder: ["anthropic:personal", "anthropic:work", "anthropic:backup"],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -264,6 +292,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => claudeCard.textContent()).toContain("Ready");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
+      const profiles = claudeCard.locator(".model-providers__profiles");
+      await expect.poll(async () => profiles.getAttribute("open")).toBeNull();
+      await expect
+        .poll(async () => profiles.locator("summary").textContent())
+        .toContain("3 accounts · Primary: Personal");
+      await profiles.locator("summary").click();
+      await expect.poll(async () => profiles.getAttribute("open")).not.toBeNull();
+      await expect.poll(async () => profiles.textContent()).toContain("personal@example.com");
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
@@ -282,6 +318,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await googleCard.waitFor();
       await expect.poll(async () => googleCard.textContent()).toContain("0 of 1 models available");
       await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(4);
+      if (recordVisuals) {
+        await claudeCard.screenshot({ path: path.join(artifactDir, "profiles-desktop.png") });
+        await page.setViewportSize({ height: 844, width: 390 });
+        await profiles.scrollIntoViewIfNeeded();
+        await profiles.screenshot({ path: path.join(artifactDir, "profiles-mobile.png") });
+      }
     } finally {
       await context.close();
     }

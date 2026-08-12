@@ -183,10 +183,7 @@ describe("buildModelProviderCards", () => {
       expiryLabel: "-1m",
     });
     expect(firstCard(cards).credentialProviderIds).toEqual(["anthropic", "claude-cli"]);
-    expect(firstCard(cards).logoutTargets).toEqual([
-      { provider: "anthropic", profileIds: ["p1"] },
-      { provider: "claude-cli", profileIds: ["p2"] },
-    ]);
+    expect(firstCard(cards).profileProviderIds).toEqual({ p1: "anthropic", p2: "claude-cli" });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {

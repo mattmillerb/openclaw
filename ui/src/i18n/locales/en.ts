@@ -3960,6 +3960,10 @@ export const en: TranslationMap = {
     profiles: {
       title: "Provider profiles",
       subtitle: "Accounts are tried in priority order, then rotated when one is unavailable.",
+      accountOne: "1 account",
+      accounts: "{count} accounts",
+      primary: "Primary: {account}",
+      coolingDown: "{count} cooling down",
       addAccount: "Add account",
       lastUsed: "Last used {time} ago",
       cooldown: "Unavailable for {time} · {reason}",
@@ -3969,6 +3973,7 @@ export const en: TranslationMap = {
       orderSaved: "Profile priority saved.",
       moveUp: "Move {account} up",
       moveDown: "Move {account} down",
+      actions: "Actions for {account}",
     },
     apiKey: {
       label: "API key",
@@ -4009,7 +4014,8 @@ export const en: TranslationMap = {
     },
     logout: {
       action: "Log out",
-      confirm: "Log out of {provider}? Saved OAuth and token profiles will be removed.",
+      profileTitle: "Log out account",
+      profileConfirm: "Log out {account}? This removes only this saved profile.",
       loggingOut: "Logging out…",
       done: "Logged out.",
     },

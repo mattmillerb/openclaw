@@ -31,11 +31,6 @@ type ModelProviderLocalCost = {
   sessionCount: number;
 };
 
-export type ModelProviderLogoutTarget = {
-  provider: string;
-  profileIds: string[];
-};
-
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
@@ -45,8 +40,6 @@ export type ModelProviderCard = {
   apiKeySupported?: boolean;
   /** Provider ids that own credentials merged into this card. */
   credentialProviderIds: string[];
-  /** Saved OAuth/token profiles eligible for targeted logout. */
-  logoutTargets: ModelProviderLogoutTarget[];
   displayName: string;
   auth?: ModelProviderAuthSummary;
   profiles: ModelAuthStatusProfile[];
@@ -151,7 +144,6 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       profileProviderIds: {},
       profileOrder: [],
       credentialProviderIds: [],
-      logoutTargets: [],
       hasConfigApiKey: false,
       modelCount: 0,
       availableModelCount: 0,
@@ -168,25 +160,6 @@ function addProviderId(ids: string[], provider: string): void {
   if (normalized && !ids.some((candidate) => normalizeProviderId(candidate) === normalized)) {
     ids.push(provider);
   }
-}
-
-function addLogoutTarget(
-  targets: ModelProviderLogoutTarget[],
-  provider: string,
-  profileIds: string[],
-): void {
-  if (profileIds.length === 0) {
-    return;
-  }
-  const normalized = normalizeProviderId(provider);
-  const existing = targets.find(
-    (candidate) => normalizeProviderId(candidate.provider) === normalized,
-  );
-  if (!existing) {
-    targets.push({ provider, profileIds: [...new Set(profileIds)] });
-    return;
-  }
-  existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
 /**
@@ -295,13 +268,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
     }
-    addLogoutTarget(
-      draft.card.logoutTargets,
-      provider.provider,
-      provider.profiles
-        .filter((profile) => profile.logoutSupported === true)
-        .map((profile) => profile.profileId),
-    );
     draft.card.apiKey ??= provider.apiKey;
     draft.hasAuthRow = true;
     const usage = provider.usage;

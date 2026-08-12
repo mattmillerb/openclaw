@@ -17,7 +17,6 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     profileProviderIds: {},
     profileOrder: [],
     credentialProviderIds: ["openai"],
-    logoutTargets: [],
     hasConfigApiKey: false,
     modelCount: 1,
     availableModelCount: 1,
@@ -53,7 +52,6 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     probeResults: {},
     keyEditorProvider: null,
     keyDraft: "",
-    pendingLogoutProvider: null,
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
@@ -64,9 +62,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onSaveKey: () => undefined,
     onRemoveKey: () => undefined,
     onProbe: () => undefined,
-    onRequestLogout: () => undefined,
-    onCancelLogout: () => undefined,
-    onLogout: () => undefined,
+    onLogoutProfile: () => undefined,
     onProfileOrderChange: () => undefined,
     onClearProfileCooldown: () => undefined,
     onAddProviderToggle: () => undefined,
@@ -154,12 +150,25 @@ describe("renderModelProviders", () => {
                 cooldownUntil: Date.now() + 60_000,
                 cooldownReason: "rate_limit",
               },
+              {
+                profileId: "openai:key",
+                type: "api_key",
+                status: "static",
+              },
+              {
+                profileId: "openai-codex:work",
+                type: "oauth",
+                status: "ok",
+                displayName: "Work",
+              },
             ],
             profileProviderIds: {
               "openai:primary": "openai",
               "openai:backup": "openai",
+              "openai:key": "openai",
+              "openai-codex:work": "openai-codex",
             },
-            profileOrder: ["openai:primary", "openai:backup"],
+            profileOrder: ["openai:primary", "openai:key", "openai:backup", "openai-codex:work"],
           }),
         ],
         onProfileOrderChange,
@@ -167,17 +176,28 @@ describe("renderModelProviders", () => {
       }),
     );
 
+    const details = container.querySelector<HTMLDetailsElement>(".model-providers__profiles");
+    expect(details?.open).toBe(false);
+    expect(text(details?.querySelector("summary") ?? null)).toContain(
+      "3 accounts · Primary: Primary",
+    );
+    details?.querySelector("summary")?.click();
+    expect(details?.open).toBe(true);
     expect(text(container)).toContain("Provider profiles");
     expect(text(container)).toContain("Primary");
     expect(text(container)).toContain("backup@example.com");
-    container
-      .querySelector<HTMLButtonElement>('[aria-label="Move backup@example.com up"]')
-      ?.click();
+    const backupMenu = container.querySelector('[data-profile-id="openai:backup"] wa-dropdown');
+    backupMenu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: "move-up" } } }),
+    );
     expect(onProfileOrderChange).toHaveBeenCalledWith("openai", "openai", [
       "openai:backup",
+      "openai:key",
       "openai:primary",
     ]);
-    button(container, "Clear cooldown")?.click();
+    backupMenu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: "clear-cooldown" } } }),
+    );
     expect(onClearProfileCooldown).toHaveBeenCalledWith("openai", "openai", "openai:backup");
   });
 
@@ -362,7 +382,15 @@ describe("renderModelProviders", () => {
           card({
             hasConfigApiKey: true,
             apiKey: { source: "config" },
-            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+            profiles: [
+              {
+                profileId: "openai:oauth",
+                type: "oauth",
+                status: "ok",
+                logoutSupported: true,
+              },
+            ],
+            profileProviderIds: { "openai:oauth": "openai" },
           }),
         ],
         keyEditorProvider: "openai",
@@ -394,7 +422,10 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(button(provider!, "Replace key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
-    expect(button(provider!, "Log out")?.disabled).toBe(true);
+    expect(
+      provider?.querySelector<HTMLButtonElement>(".model-providers__profile-menu-trigger")
+        ?.disabled,
+    ).toBe(true);
 
     const addForm = container.querySelector(".model-providers__add-form");
     expect(
@@ -870,14 +901,14 @@ describe("renderModelProviders", () => {
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
 
-  it("shows logout confirmation only for OAuth or token profiles", () => {
-    const onLogout = vi.fn();
+  it("targets logout to the selected saved profile", () => {
+    const onLogoutProfile = vi.fn();
     const container = mount(
       props({
         cards: [
           card({
             credentialProviderIds: ["openai", "openai-codex"],
-            logoutTargets: [{ provider: "openai-codex", profileIds: ["openai:oauth"] }],
+            profileProviderIds: { "openai:oauth": "openai-codex" },
             profiles: [
               {
                 profileId: "openai:oauth",
@@ -888,17 +919,18 @@ describe("renderModelProviders", () => {
             ],
           }),
         ],
-        pendingLogoutProvider: "openai",
-        onLogout,
+        onLogoutProfile,
       }),
     );
-    expect(text(container.querySelector(".model-providers__confirm"))).toContain(
-      "Log out of OpenAI?",
+    container
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "logout" } } }));
+    expect(onLogoutProfile).toHaveBeenCalledWith(
+      "openai",
+      "openai-codex",
+      "openai:oauth",
+      "openai:oauth",
     );
-    container.querySelector<HTMLButtonElement>(".model-providers__confirm .btn.danger")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", [
-      { provider: "openai-codex", profileIds: ["openai:oauth"] },
-    ]);
   });
 
   it("uses the original config key for credential mutations", () => {

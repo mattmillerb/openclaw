@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import { icon, icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
@@ -16,6 +17,7 @@ import {
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
@@ -26,7 +28,6 @@ import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
-  ModelProviderLogoutTarget,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
@@ -64,7 +65,6 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogoutProvider: string | null;
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
@@ -75,9 +75,7 @@ type ModelProvidersViewProps = {
   onSaveKey: (provider: string, configKey: string) => void;
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (provider: string) => void;
-  onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onLogoutProfile: (cardId: string, provider: string, profileId: string, label: string) => void;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[]) => void;
   onClearProfileCooldown: (cardId: string, provider: string, profileId: string) => void;
   onAddProviderToggle: () => void;
@@ -285,6 +283,40 @@ function orderedProfiles(card: ModelProviderCard) {
   });
 }
 
+function profileCooldown(profile: ModelProviderCard["profiles"][number]) {
+  const until = Math.max(
+    profile.cooldownUntil ?? 0,
+    profile.disabledUntil ?? 0,
+    profile.blockedUntil ?? 0,
+  );
+  return {
+    until,
+    reason: profile.cooldownReason || profile.disabledReason || profile.blockedReason,
+  };
+}
+
+function renderProfileStatus(profile: ModelProviderCard["profiles"][number]) {
+  const cooldown = profileCooldown(profile);
+  if (cooldown.until > Date.now()) {
+    return renderSettingsStatus({
+      kind: "warn",
+      label: t("modelProviders.profiles.cooldown", {
+        time: formatTimeMs(cooldown.until - Date.now()),
+        reason: cooldown.reason ?? t("modelProviders.profiles.unavailable"),
+      }),
+    });
+  }
+  const status =
+    profile.status === "ok" || profile.status === "static"
+      ? { kind: "ok" as const, label: t("modelProviders.status.ready") }
+      : profile.status === "expiring"
+        ? { kind: "warn" as const, label: t("modelProviders.status.expiring") }
+        : profile.status === "expired"
+          ? { kind: "danger" as const, label: t("modelProviders.status.expired") }
+          : { kind: "muted" as const, label: t("modelProviders.status.missing") };
+  return renderSettingsStatus(status);
+}
+
 function renderProfiles(card: ModelProviderCard, props: ModelProvidersViewProps) {
   const profiles = orderedProfiles(card).filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
@@ -292,109 +324,161 @@ function renderProfiles(card: ModelProviderCard, props: ModelProvidersViewProps)
   if (profiles.length === 0) {
     return nothing;
   }
-  const busy = Boolean(props.busy[`profiles:${card.id}`]);
+  const busy = Boolean(props.busy[`profiles:${card.id}`] || props.busy[`logout:${card.id}`]);
   const message = props.messages[`profiles:${card.id}`];
   const mutationDisabled = configMutationDisabled(props);
+  const primary = profiles[0];
+  const coolingDown = profiles.filter(
+    (profile) => profileCooldown(profile).until > Date.now(),
+  ).length;
   return html`
-    <div class="model-providers__profiles">
-      <div class="model-providers__profiles-heading">
-        <div>
+    <details class="model-providers__profiles">
+      <summary class="model-providers__profiles-summary">
+        <span class="model-providers__profiles-summary-copy">
           <strong>${t("modelProviders.profiles.title")}</strong>
+          <span>
+            ${t(
+              profiles.length === 1
+                ? "modelProviders.profiles.accountOne"
+                : "modelProviders.profiles.accounts",
+              { count: String(profiles.length) },
+            )}
+            · ${t("modelProviders.profiles.primary", { account: profileLabel(primary!) })}
+          </span>
+        </span>
+        <span class="model-providers__profiles-summary-actions">
+          ${coolingDown > 0
+            ? renderSettingsStatus({
+                kind: "warn",
+                label: t("modelProviders.profiles.coolingDown", {
+                  count: String(coolingDown),
+                }),
+              })
+            : nothing}
+          <span class="model-providers__profiles-chevron" aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </span>
+      </summary>
+      <div class="model-providers__profiles-content">
+        <div class="model-providers__profiles-heading">
           <span>${t("modelProviders.profiles.subtitle")}</span>
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${mutationDisabled}
+            @click=${props.onOpenModelSetup}
+          >
+            ${t("modelProviders.profiles.addAccount")}
+          </button>
         </div>
-        <button class="btn btn--sm" ?disabled=${mutationDisabled} @click=${props.onOpenModelSetup}>
-          ${t("modelProviders.profiles.addAccount")}
-        </button>
-      </div>
-      ${profiles.map((profile, index) => {
-        const provider = card.profileProviderIds[profile.profileId] ?? card.id;
-        const cooldownUntil = Math.max(
-          profile.cooldownUntil ?? 0,
-          profile.disabledUntil ?? 0,
-          profile.blockedUntil ?? 0,
-        );
-        const cooldownReason =
-          profile.cooldownReason || profile.disabledReason || profile.blockedReason;
-        return html`
-          <div class="model-providers__profile" data-profile-id=${profile.profileId}>
-            <div class="model-providers__profile-priority">${index + 1}</div>
-            <div class="model-providers__profile-copy">
-              <strong>${profileLabel(profile)}</strong>
-              ${profile.email && profile.displayName
-                ? html`<span>${profile.email}</span>`
-                : html`<span>${profile.profileId}</span>`}
-              ${cooldownUntil > Date.now()
-                ? html`<span class="model-providers__profile-warning">
-                    ${t("modelProviders.profiles.cooldown", {
-                      time: formatTimeMs(cooldownUntil - Date.now()),
-                      reason: cooldownReason ?? t("modelProviders.profiles.unavailable"),
-                    })}
-                  </span>`
-                : profile.lastUsedAt
-                  ? html`<span>
-                      ${t("modelProviders.profiles.lastUsed", {
-                        time: formatTimeMs(Date.now() - profile.lastUsedAt),
-                      })}
-                    </span>`
-                  : nothing}
-            </div>
-            <div class="model-providers__profile-actions">
-              <button
-                class="btn btn--sm"
-                aria-label=${t("modelProviders.profiles.moveUp", {
-                  account: profileLabel(profile),
-                })}
-                ?disabled=${busy || mutationDisabled || index === 0}
-                @click=${() => {
-                  const next = profiles.map((candidate) => candidate.profileId);
-                  const previous = next[index - 1];
-                  const current = next[index];
-                  if (previous === undefined || current === undefined) {
-                    return;
-                  }
-                  next[index - 1] = current;
-                  next[index] = previous;
-                  props.onProfileOrderChange(card.id, provider, next);
-                }}
-              >
-                ↑
-              </button>
-              <button
-                class="btn btn--sm"
-                aria-label=${t("modelProviders.profiles.moveDown", {
-                  account: profileLabel(profile),
-                })}
-                ?disabled=${busy || mutationDisabled || index === profiles.length - 1}
-                @click=${() => {
-                  const next = profiles.map((candidate) => candidate.profileId);
-                  const current = next[index];
-                  const following = next[index + 1];
-                  if (current === undefined || following === undefined) {
-                    return;
-                  }
-                  next[index] = following;
-                  next[index + 1] = current;
-                  props.onProfileOrderChange(card.id, provider, next);
-                }}
-              >
-                ↓
-              </button>
-              ${cooldownUntil > Date.now()
-                ? html`<button
-                    class="btn btn--sm"
-                    ?disabled=${busy || mutationDisabled}
-                    @click=${() =>
-                      props.onClearProfileCooldown(card.id, provider, profile.profileId)}
+        ${profiles.map((profile, index) => {
+          const provider = card.profileProviderIds[profile.profileId] ?? card.id;
+          const cooldown = profileCooldown(profile);
+          const ownerProfiles = orderedProfiles(card).filter(
+            (candidate) => (card.profileProviderIds[candidate.profileId] ?? card.id) === provider,
+          );
+          const visibleOwnerProfiles = ownerProfiles.filter(
+            (candidate) => candidate.type === "oauth" || candidate.type === "token",
+          );
+          const ownerIndex = visibleOwnerProfiles.findIndex(
+            (candidate) => candidate.profileId === profile.profileId,
+          );
+          const canMoveUp = ownerIndex > 0;
+          const canMoveDown = ownerIndex < visibleOwnerProfiles.length - 1;
+          const canClearCooldown = cooldown.until > Date.now();
+          const canLogout = profile.logoutSupported === true;
+          return html`
+            <div class="model-providers__profile" data-profile-id=${profile.profileId}>
+              <div class="model-providers__profile-priority">${index + 1}</div>
+              <div class="model-providers__profile-copy">
+                <strong>${profileLabel(profile)}</strong>
+                ${profile.email && profile.displayName
+                  ? html`<span>${profile.email}</span>`
+                  : html`<span>${profile.profileId}</span>`}
+                <span class="model-providers__profile-meta">
+                  ${renderProfileStatus(profile)}
+                  ${profile.lastUsedAt
+                    ? html`<span>
+                        ${t("modelProviders.profiles.lastUsed", {
+                          time: formatTimeMs(Date.now() - profile.lastUsedAt),
+                        })}
+                      </span>`
+                    : nothing}
+                </span>
+              </div>
+              ${canMoveUp || canMoveDown || canClearCooldown || canLogout
+                ? html`<wa-dropdown
+                    class="model-providers__profile-menu"
+                    placement="bottom-end"
+                    @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                      const action = event.detail.item.value;
+                      if (action === "logout") {
+                        props.onLogoutProfile(
+                          card.id,
+                          provider,
+                          profile.profileId,
+                          profileLabel(profile),
+                        );
+                        return;
+                      }
+                      if (action === "clear-cooldown") {
+                        props.onClearProfileCooldown(card.id, provider, profile.profileId);
+                        return;
+                      }
+                      const offset = action === "move-up" ? -1 : action === "move-down" ? 1 : 0;
+                      const adjacent = visibleOwnerProfiles[ownerIndex + offset];
+                      if (offset === 0 || !adjacent) {
+                        return;
+                      }
+                      const next = ownerProfiles.map((candidate) => candidate.profileId);
+                      const currentIndex = next.indexOf(profile.profileId);
+                      const adjacentIndex = next.indexOf(adjacent.profileId);
+                      [next[currentIndex], next[adjacentIndex]] = [
+                        next[adjacentIndex]!,
+                        next[currentIndex]!,
+                      ];
+                      props.onProfileOrderChange(card.id, provider, next);
+                    }}
                   >
-                    ${t("modelProviders.profiles.clearCooldown")}
-                  </button>`
+                    <button
+                      slot="trigger"
+                      type="button"
+                      class="btn btn--sm btn--ghost model-providers__profile-menu-trigger"
+                      aria-label=${t("modelProviders.profiles.actions", {
+                        account: profileLabel(profile),
+                      })}
+                      title=${t("modelProviders.profiles.actions", {
+                        account: profileLabel(profile),
+                      })}
+                      ?disabled=${busy || mutationDisabled}
+                    >
+                      ${icon("moreHorizontal")}
+                    </button>
+                    <wa-dropdown-item value="move-up" ?disabled=${!canMoveUp}>
+                      ${t("modelProviders.profiles.moveUp", { account: profileLabel(profile) })}
+                    </wa-dropdown-item>
+                    <wa-dropdown-item value="move-down" ?disabled=${!canMoveDown}>
+                      ${t("modelProviders.profiles.moveDown", { account: profileLabel(profile) })}
+                    </wa-dropdown-item>
+                    ${canClearCooldown
+                      ? html`<wa-dropdown-item value="clear-cooldown">
+                          ${t("modelProviders.profiles.clearCooldown")}
+                        </wa-dropdown-item>`
+                      : nothing}
+                    ${canLogout
+                      ? html`<wa-dropdown-item value="logout" variant="danger">
+                          ${t("modelProviders.logout.action")}
+                        </wa-dropdown-item>`
+                      : nothing}
+                  </wa-dropdown>`
                 : nothing}
             </div>
-          </div>
-        `;
-      })}
-      ${renderMutationMessage(message)}
-    </div>
+          `;
+        })}
+        ${renderMutationMessage(message)}
+      </div>
+    </details>
   `;
 }
 
@@ -481,10 +565,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
-  const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -532,40 +614,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             </button>
           `
         : nothing}
-      ${canLogout
-        ? html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${logoutBusy || mutationDisabled}
-              title=${blocked}
-              @click=${() => props.onRequestLogout(card.id)}
-            >
-              ${t("modelProviders.logout.action")}
-            </button>
-          `
-        : nothing}
     </div>
-    ${props.pendingLogoutProvider === card.id
-      ? html`
-          <div class="model-providers__confirm" role="alert">
-            <span>${t("modelProviders.logout.confirm", { provider: card.displayName })}</span>
-            <div class="model-providers__form-actions">
-              <button
-                class="btn danger btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                @click=${() => props.onLogout(card.id, card.logoutTargets)}
-              >
-                ${logoutBusy
-                  ? t("modelProviders.logout.loggingOut")
-                  : t("modelProviders.logout.action")}
-              </button>
-              <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                ${t("common.cancel")}
-              </button>
-            </div>
-          </div>
-        `
-      : nothing}
   `;
 }
 

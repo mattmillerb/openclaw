@@ -9,6 +9,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -29,7 +30,6 @@ import {
   buildUnconfiguredProviderOptions,
   readModelProviderConfig,
   type DefaultModelSelection,
-  type ModelProviderLogoutTarget,
 } from "./data.ts";
 import {
   EMPTY_MODEL_PROVIDERS_DATA,
@@ -107,7 +107,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private probeUnsupported = false;
   @state() private keyEditorProvider: string | null = null;
   @state() private keyDraft = "";
-  @state() private pendingLogoutProvider: string | null = null;
   @state() private addProviderOpen = false;
   @state() private addProviderId = "";
   @state() private addProviderKey = "";
@@ -224,7 +223,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.probeUnsupported = false;
     this.keyEditorProvider = null;
     this.keyDraft = "";
-    this.pendingLogoutProvider = null;
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
@@ -260,7 +258,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.selectedAgentId = agentId;
     this.agentEpoch += 1;
     this.busy = {};
-    this.pendingLogoutProvider = null;
     this.messages = {};
     this.probeResults = {};
     return true;
@@ -488,7 +485,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private async logout(cardId: string, targets: ModelProviderLogoutTarget[]) {
+  private async logout(cardId: string, provider: string, profileId: string) {
     const client = this.context.gateway.snapshot.client;
     const key = `logout:${cardId}`;
     if (!client || !this.canMutate() || this.busy[key]) {
@@ -501,19 +498,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.setBusy(key, true);
     this.setMessage(cardId, null);
     try {
-      let firstError: unknown;
-      for (const target of targets) {
-        // OAuth profiles are agent-owned; stop undispatched targets after any
-        // scope change, including a switch away from and back to this agent.
-        if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
-          return;
-        }
-        try {
-          await client.request("models.authLogout", { ...target, agentId });
-        } catch (error) {
-          firstError ??= error;
-        }
-      }
+      await client.request("models.authLogout", { provider, profileIds: [profileId], agentId });
       if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
         return;
       }
@@ -521,11 +506,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
         return;
       }
-      if (firstError) {
-        this.setMessage(cardId, { kind: "error", text: modelProviderErrorMessage(firstError) });
-        return;
-      }
-      this.pendingLogoutProvider = null;
       this.setMessage(cardId, { kind: "success", text: t("modelProviders.logout.done") });
     } catch (error) {
       if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
@@ -535,6 +515,24 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
         this.setBusy(key, false);
       }
+    }
+  }
+
+  private async requestProfileLogout(
+    cardId: string,
+    provider: string,
+    profileId: string,
+    label: string,
+  ) {
+    const agentEpoch = this.agentEpoch;
+    const confirmed = await showConfirmDialog({
+      title: t("modelProviders.logout.profileTitle"),
+      message: t("modelProviders.logout.profileConfirm", { account: label }),
+      confirmLabel: t("modelProviders.logout.action"),
+      danger: true,
+    });
+    if (confirmed && this.agentEpoch === agentEpoch) {
+      await this.logout(cardId, provider, profileId);
     }
   }
 
@@ -684,7 +682,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       probeResults: this.probeResults,
       keyEditorProvider: this.keyEditorProvider,
       keyDraft: this.keyDraft,
-      pendingLogoutProvider: this.pendingLogoutProvider,
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
@@ -695,9 +692,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onSaveKey: (provider, configKey) => void this.saveKey(provider, configKey),
       onRemoveKey: (provider, configKey) => void this.removeKey(provider, configKey),
       onProbe: (cardId, providers) => void this.probe(cardId, providers),
-      onRequestLogout: (provider) => (this.pendingLogoutProvider = provider),
-      onCancelLogout: () => (this.pendingLogoutProvider = null),
-      onLogout: (cardId, providers) => void this.logout(cardId, providers),
+      onLogoutProfile: (cardId, provider, profileId, label) =>
+        void this.requestProfileLogout(cardId, provider, profileId, label),
       onProfileOrderChange: (cardId, provider, profileIds) =>
         void this.mutateProfile(
           `profiles:${cardId}`,
