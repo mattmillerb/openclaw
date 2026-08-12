@@ -356,7 +356,7 @@ extension RealtimeTalkRelaySessionTests {
         }
 
         await session._test_handleGatewayEvent(audio(7, "turn-7"))
-        #expect(session.cancelOutputIfPlaying(reason: "barge-in"))
+        session.cancelOutput(reason: "barge-in")
         for _ in 0..<10 {
             if await !requests.snapshot().isEmpty { break }
             await Task.yield()
@@ -412,7 +412,7 @@ extension RealtimeTalkRelaySessionTests {
             seq: nil,
             stateversion: nil))
 
-        #expect(session.cancelOutputIfPlaying(reason: "barge-in"))
+        session.cancelOutput(reason: "barge-in")
         for _ in 0..<10 {
             if await !requests.snapshot().isEmpty { break }
             await Task.yield()
@@ -441,7 +441,6 @@ extension RealtimeTalkRelaySessionTests {
             onSpeakingChanged: { speakingStates.append($0) })
         session._test_setRelaySessionId("relay-1")
 
-        #expect(!session.cancelOutputIfPlaying())
         session.setOutputPaused(true)
         await session._test_handleGatewayEvent(outputAudioEvent(generation: 1))
         #expect(speakingStates.isEmpty)

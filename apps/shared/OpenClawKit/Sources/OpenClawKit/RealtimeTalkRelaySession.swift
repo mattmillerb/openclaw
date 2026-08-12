@@ -1206,13 +1206,6 @@ extension RealtimeTalkRelaySession {
         }
     }
 
-    @discardableResult
-    public func cancelOutputIfPlaying(reason: String = "user") -> Bool {
-        guard self.isOutputPlaying else { return false }
-        self.cancelOutput(reason: reason)
-        return true
-    }
-
     public func cancelOutput(reason: String = "user") {
         guard let relaySessionId else { return }
         let outputIdentity = self.outputIdentity ?? OutputIdentity([:])
