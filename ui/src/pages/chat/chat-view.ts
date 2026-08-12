@@ -624,42 +624,43 @@ export function renderChat(props: ChatProps) {
                 : ""}"
             >
               <div class="chat-main__conversation">
-                ${thread} ${scrollToBottomButton}
-                ${props.inlineApproval && props.onApprovalDecision
-                  ? html`<div class="chat-inline-approval">
-                      ${renderExecApprovalCard({
-                        approval: props.inlineApproval,
-                        busy: props.approvalBusy === true,
-                        error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
-                        nowMs: props.approvalNowMs ?? Date.now(),
-                        variant: "inline",
-                        onDecision: props.onApprovalDecision,
-                      })}
-                    </div>`
-                  : nothing}
-                ${renderChatTaskSuggestionTray(props)}
-                ${renderChatPullRequests({
-                  pullRequests: props.pullRequests ?? [],
-                  branch: props.pullRequestsBranch,
-                  rateLimited: props.pullRequestsRateLimited === true,
-                  expanded: props.pullRequestsExpanded === true,
-                  onExpand: () => props.onExpandPullRequests?.(),
-                  onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
-                })}
-                ${renderChatSessionSuggestions({
-                  suggestions: props.sessionSuggestions ?? [],
-                  role: props.sessionSuggestionRole,
-                  busyIds: props.sessionSuggestionBusyIds ?? new Set(),
-                  archived: props.sessionSuggestionsArchived === true,
-                  canResolve: props.canResolveSessionSuggestions === true,
-                  onResolve: (suggestion, resolution) =>
-                    props.onResolveSessionSuggestion?.(suggestion, resolution),
-                })}
-                ${renderChatSwarmProgress({
-                  sessions: props.swarmSessions ?? [],
-                  sessionKey: props.sessionKey,
-                })}
-                ${showModelSetupSplash ? nothing : chatColumnFooter}
+                ${thread} ${scrollToBottomButton} ${renderChatTaskSuggestionTray(props)}
+                <div class="chat-bottom-dock">
+                  ${props.inlineApproval && props.onApprovalDecision
+                    ? html`<div class="chat-inline-approval">
+                        ${renderExecApprovalCard({
+                          approval: props.inlineApproval,
+                          busy: props.approvalBusy === true,
+                          error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                          nowMs: props.approvalNowMs ?? Date.now(),
+                          variant: "inline",
+                          onDecision: props.onApprovalDecision,
+                        })}
+                      </div>`
+                    : nothing}
+                  ${renderChatPullRequests({
+                    pullRequests: props.pullRequests ?? [],
+                    branch: props.pullRequestsBranch,
+                    rateLimited: props.pullRequestsRateLimited === true,
+                    expanded: props.pullRequestsExpanded === true,
+                    onExpand: () => props.onExpandPullRequests?.(),
+                    onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+                  })}
+                  ${renderChatSessionSuggestions({
+                    suggestions: props.sessionSuggestions ?? [],
+                    role: props.sessionSuggestionRole,
+                    busyIds: props.sessionSuggestionBusyIds ?? new Set(),
+                    archived: props.sessionSuggestionsArchived === true,
+                    canResolve: props.canResolveSessionSuggestions === true,
+                    onResolve: (suggestion, resolution) =>
+                      props.onResolveSessionSuggestion?.(suggestion, resolution),
+                  })}
+                  ${renderChatSwarmProgress({
+                    sessions: props.swarmSessions ?? [],
+                    sessionKey: props.sessionKey,
+                  })}
+                  ${showModelSetupSplash ? nothing : chatColumnFooter}
+                </div>
               </div>
               ${props.sessionRailReady
                 ? html`

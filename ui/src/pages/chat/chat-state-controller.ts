@@ -21,6 +21,21 @@ type ChatRenderLifecycleScope = {
   cancellations: Set<() => void>;
 };
 
+const CHAT_BOTTOM_DOCK_HEIGHT_PROPERTY = "--chat-bottom-dock-height";
+const ACTIVE_CHAT_BOTTOM_DOCK_HEIGHT_PROPERTY = "--chat-active-bottom-dock-height";
+
+function syncActiveChatBottomDockHeight(shell: HTMLElement): void {
+  const heights = [
+    ...shell.querySelectorAll<HTMLElement>(
+      'openclaw-chat-pane[aria-hidden="false"] .chat-bottom-dock',
+    ),
+  ].map((dock) => dock.getBoundingClientRect().height);
+  shell.style.setProperty(
+    ACTIVE_CHAT_BOTTOM_DOCK_HEIGHT_PROPERTY,
+    `${Math.ceil(Math.max(0, ...heights))}px`,
+  );
+}
+
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   readonly attachmentReads: ChatAttachmentReadLifecycle;
   private readonly composerPersistence: ChatComposerPersistence;
@@ -33,8 +48,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private scrollAfterUpdate = false;
   private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
-  private chatThreadResizeObserver: ResizeObserver | null = null;
+  private chatLayoutResizeObserver: ResizeObserver | null = null;
   private chatThreadResizeTarget: Element | null = null;
+  private chatBottomDockResizeTarget: HTMLElement | null = null;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
   private renderLifecycleConnectionEpoch = 0;
@@ -243,33 +259,55 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
-  private syncChatThreadResizeObserver(state: TState) {
+  private syncChatLayoutResizeObserver(state: TState) {
     if (typeof ResizeObserver !== "function") {
       return;
     }
     const thread = state.querySelector(".chat-thread");
-    if (thread && this.chatThreadResizeTarget === thread) {
+    const dock = state.querySelector(".chat-bottom-dock") as HTMLElement | null;
+    if (
+      thread &&
+      dock &&
+      this.chatThreadResizeTarget === thread &&
+      this.chatBottomDockResizeTarget === dock
+    ) {
       return;
     }
 
-    this.chatThreadResizeObserver?.disconnect();
-    this.chatThreadResizeObserver = null;
+    this.chatLayoutResizeObserver?.disconnect();
+    this.chatLayoutResizeObserver = null;
     this.chatThreadResizeTarget = null;
-    if (!thread) {
+    this.chatBottomDockResizeTarget = null;
+    if (!thread || !dock) {
       return;
     }
 
-    // The transcript virtualizer owns row measurement and content-height
-    // correction. This observer only follows viewport-size changes.
-    this.chatThreadResizeObserver = new ResizeObserver(() => {
+    const syncDockHeight = () => {
+      const height = Math.ceil(dock.getBoundingClientRect().height);
+      dock
+        .closest<HTMLElement>(".chat-main")
+        ?.style.setProperty(CHAT_BOTTOM_DOCK_HEIGHT_PROPERTY, `${height}px`);
+      const shell = dock.closest<HTMLElement>(".shell");
+      if (shell) {
+        syncActiveChatBottomDockHeight(shell);
+      }
+    };
+    syncDockHeight();
+
+    // The transcript virtualizer still owns row measurement and anchoring. This
+    // observer only carries viewport and bottom-chrome size changes into layout.
+    this.chatLayoutResizeObserver = new ResizeObserver(() => {
       const currentState = this.stateValue;
       if (!currentState) {
         return;
       }
+      syncDockHeight();
       scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
     });
-    this.chatThreadResizeObserver.observe(thread);
+    this.chatLayoutResizeObserver.observe(thread);
+    this.chatLayoutResizeObserver.observe(dock);
     this.chatThreadResizeTarget = thread;
+    this.chatBottomDockResizeTarget = dock;
   }
 
   hostConnected() {
@@ -282,7 +320,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   hostUpdated() {
     const state = this.stateValue;
     if (state) {
-      this.syncChatThreadResizeObserver(state);
+      this.syncChatLayoutResizeObserver(state);
     }
     if (!this.scrollAfterUpdate) {
       return;
@@ -315,9 +353,20 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private stopChatEffects() {
-    this.chatThreadResizeObserver?.disconnect();
-    this.chatThreadResizeObserver = null;
+    this.chatLayoutResizeObserver?.disconnect();
+    this.chatLayoutResizeObserver = null;
     this.chatThreadResizeTarget = null;
+    const dock = this.chatBottomDockResizeTarget;
+    this.chatBottomDockResizeTarget = null;
+    if (dock) {
+      const shell = dock.closest<HTMLElement>(".shell");
+      dock
+        .closest<HTMLElement>(".chat-main")
+        ?.style.removeProperty(CHAT_BOTTOM_DOCK_HEIGHT_PROPERTY);
+      if (shell) {
+        queueMicrotask(() => syncActiveChatBottomDockHeight(shell));
+      }
+    }
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }

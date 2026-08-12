@@ -163,6 +163,7 @@
 
 .chat-main {
   /* Positioning context for floating overlays and the optional session rail. */
+  --chat-composer-floater-gap: 12px;
   position: relative;
   min-width: 312px;
   display: flex;

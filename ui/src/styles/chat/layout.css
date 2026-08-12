@@ -311,7 +311,8 @@ openclaw-chat-page {
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(20px, 3vh, 28px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0
+    calc(var(--chat-bottom-dock-height, 0px) + var(--chat-composer-floater-gap));
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -446,7 +447,7 @@ openclaw-chat-page {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-bottom-dock-height, 0px) + var(--chat-composer-floater-gap));
   left: 50%;
   display: inline-flex;
   align-items: center;
@@ -1647,6 +1648,30 @@ button.chat-reply-preview--message:disabled {
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
   margin: 8px auto 14px;
+}
+
+/* Bottom chrome overlays the transcript while its measured footprint remains
+   reserved inside the scrollport, so the final row can still clear the dock. */
+.chat-bottom-dock {
+  position: absolute;
+  z-index: 20;
+  inset: auto 0 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.chat-bottom-dock::before {
+  content: "";
+  position: absolute;
+  inset: -28px 0 0;
+  background: linear-gradient(to bottom, transparent, var(--chat-surface) 28px);
+  pointer-events: none;
+}
+
+.chat-bottom-dock > * {
+  position: relative;
+  pointer-events: auto;
 }
 
 /* Floating tray pinned to the conversation's top-right (the positioned

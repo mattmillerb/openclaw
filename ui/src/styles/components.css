@@ -616,10 +616,8 @@ openclaw-session-owner-chip {
 }
 
 /* Passive notification, so it sits in the trailing bottom corner rather than
- * centered over the content column, where it landed on top of the chat composer's
- * controls. Overlapping the composer region from the corner is accepted. The host
- * shows one toast at a time (`show()` replaces the active one), so there is no
- * stack to offset against. */
+ * centered over the content column. The host shows one toast at a time (`show()`
+ * replaces the active one), so there is no stack to offset against. */
 .app-toast {
   position: fixed;
   right: calc(20px + var(--safe-area-right));
@@ -635,6 +633,10 @@ openclaw-session-owner-chip {
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
+}
+
+.shell--chat .app-toast {
+  bottom: calc(20px + var(--safe-area-bottom) + var(--chat-active-bottom-dock-height, 0px));
 }
 
 /* A corner toast degenerates at phone widths, where it would span nearly the
@@ -2033,7 +2035,10 @@ openclaw-chat-session-rail {
     top: auto;
     left: max(8px, var(--safe-area-left));
     right: max(8px, var(--safe-area-right));
-    bottom: calc(108px + var(--safe-area-bottom));
+    bottom: calc(
+      var(--chat-bottom-dock-height, 96px) + var(--chat-composer-floater-gap, 12px) +
+        var(--safe-area-bottom)
+    );
     z-index: 35;
     width: auto;
   }
