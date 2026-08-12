@@ -264,26 +264,25 @@ describe("PluginsPage", () => {
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
     expect(page.installOutcomeReconciliations[rowKey]).toBe("checking");
 
-    catalogRefresh.resolve(
-      createResult(
-        createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
-      ),
-    );
-    await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined());
-    expect(page.result?.plugins[0]?.installed).toBe(true);
-
     retry.resolve({
       ok: true,
       plugin: createPlugin({ id: "lobster", name: "Lobster" }),
       restartRequired: true,
     });
     await pendingRetry;
+    catalogRefresh.resolve(
+      createResult(
+        createPlugin({ id: "lobster", name: "Lobster", installed: true, enabled: true }),
+      ),
+    );
+    await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBeUndefined());
     expect(page.messages[rowKey]).toBeUndefined();
     expect(page.result?.plugins[0]?.installed).toBe(true);
   });
 
   it("keeps an unknown install outcome blocked until a failed catalog check is retried", async () => {
     const retry = deferred<PluginMutationResult>();
+    const catalogRefresh = deferred<PluginListResult>();
     let installCalls = 0;
     let listCalls = 0;
     const { client } = createClient(async (method) => {
@@ -308,7 +307,7 @@ describe("PluginsPage", () => {
       if (method === "plugins.list") {
         listCalls += 1;
         if (listCalls === 1) {
-          throw new Error("catalog unavailable");
+          return catalogRefresh.promise;
         }
         return createResult(
           createPlugin({
@@ -333,7 +332,7 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
 
     await page.install(rowKey, installRequest);
-    void page.install(rowKey, {
+    const pendingRetry = page.install(rowKey, {
       ...installRequest,
       installPolicyWarningAcknowledgement: "approval-token",
     });
@@ -341,6 +340,12 @@ describe("PluginsPage", () => {
 
     harness.emit(client, false);
     harness.emit(client, true);
+    await waitForFast(() => expect(listCalls).toBe(1));
+    expect(page.installOutcomeReconciliations[rowKey]).toBe("checking");
+
+    retry.reject(new Error("install failed after disconnect"));
+    await pendingRetry;
+    catalogRefresh.reject(new Error("catalog unavailable"));
     await waitForFast(() => expect(page.installOutcomeReconciliations[rowKey]).toBe("failed"));
 
     await page.refreshCatalog();

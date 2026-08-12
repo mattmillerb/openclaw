@@ -860,6 +860,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       expect((await gateway.getRequests("plugins.install")).length).toBe(2);
 
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: installedLobsterPlugin,
+        restartRequired: true,
+      } satisfies PluginMutationResult);
       await gateway.rejectDeferred("plugins.list", {
         code: "UNAVAILABLE",
         message: "catalog unavailable",
@@ -882,11 +887,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await row.getByRole("button", { name: "Disable", exact: true }).waitFor();
       expect(await row.getByText("couldn’t confirm", { exact: false }).count()).toBe(0);
 
-      await gateway.resolveDeferred("plugins.install", {
-        ok: true,
-        plugin: installedLobsterPlugin,
-        restartRequired: true,
-      } satisfies PluginMutationResult);
       await row.getByRole("button", { name: "Disable", exact: true }).waitFor();
     } finally {
       await context.close();
