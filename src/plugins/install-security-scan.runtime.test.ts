@@ -591,7 +591,11 @@ describe("legacy file install scan compatibility", () => {
   it("fails closed when a maximum-size warning exceeds the aggregate display limit", async () => {
     const { findings, maxText } = createMaximumPolicyFindings();
     runInstallPolicyMock.mockResolvedValue({
-      warning: { reason: maxText, fingerprint: "oversized-warning" },
+      warning: {
+        reason: maxText,
+        fingerprint: "oversized-warning",
+        approvalFingerprint: "oversized-warning-approval",
+      },
       findings,
     });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
@@ -619,10 +623,18 @@ describe("legacy file install scan compatibility", () => {
     const { findings, maxText } = createMaximumPolicyFindings();
     runInstallPolicyMock
       .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "initial-warning" },
+        warning: {
+          reason: "review this plugin",
+          fingerprint: "initial-warning",
+          approvalFingerprint: "initial-warning-approval",
+        },
       })
       .mockResolvedValueOnce({
-        warning: { reason: maxText, fingerprint: "oversized-warning" },
+        warning: {
+          reason: maxText,
+          fingerprint: "oversized-warning",
+          approvalFingerprint: "oversized-warning-approval",
+        },
         findings,
       });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
@@ -672,7 +684,11 @@ describe("legacy file install scan compatibility", () => {
       });
       const evidence = `${"e".repeat(size - withoutEvidence.length - 3)}\ne`;
       runInstallPolicyMock.mockResolvedValueOnce({
-        warning: { reason, fingerprint: `warning-${String(size)}` },
+        warning: {
+          reason,
+          fingerprint: `warning-${String(size)}`,
+          approvalFingerprint: `warning-approval-${String(size)}`,
+        },
         findings: [{ ruleId, severity: "critical", message, file, evidence }],
       });
 
