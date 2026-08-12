@@ -41,7 +41,7 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningOccurrence } from "./install-security-scan.types.js";
-import type { PluginInstallLogger } from "./install-types.js";
+import type { InstallPublicationAuthority, PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
@@ -118,24 +118,24 @@ type ManagedPluginCatalog = {
   mutationAllowed: boolean;
 };
 
+export type ManagedPluginInstallPolicyAcknowledgement = {
+  warnings: InstallPolicyWarningOccurrence[];
+  resolvedRequest: ManagedPluginSourceInstallRequest;
+  publicationAuthority: InstallPublicationAuthority;
+};
+
 export type ManagedPluginInstallRequest =
   | {
       source: "clawhub";
       packageName: string;
       version?: string;
       acknowledgeClawHubRisk?: boolean;
-      installPolicyWarningAcknowledgement?: {
-        warnings: InstallPolicyWarningOccurrence[];
-        resolvedRequest: ManagedPluginSourceInstallRequest;
-      };
+      installPolicyWarningAcknowledgement?: ManagedPluginInstallPolicyAcknowledgement;
     }
   | {
       source: "official";
       pluginId: string;
-      installPolicyWarningAcknowledgement?: {
-        warnings: InstallPolicyWarningOccurrence[];
-        resolvedRequest: ManagedPluginSourceInstallRequest;
-      };
+      installPolicyWarningAcknowledgement?: ManagedPluginInstallPolicyAcknowledgement;
     };
 
 export type ManagedPluginSourceInstallRequest =
@@ -1191,6 +1191,7 @@ async function persistManagedSourceInstall(params: {
   persistenceLogger?: PluginInstallLogger;
   successMessage?: string;
   cleanupOnPersistenceFailure?: boolean;
+  publicationAuthority?: InstallPublicationAuthority;
 }): Promise<OpenClawConfig> {
   const persist = () =>
     persistPluginInstall({
@@ -1201,6 +1202,7 @@ async function persistManagedSourceInstall(params: {
       runtime: params.runtime,
       ...(params.persistenceLogger ? { persistenceLogger: params.persistenceLogger } : {}),
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
+      ...(params.publicationAuthority ? { publicationAuthority: params.publicationAuthority } : {}),
     });
   if (!params.cleanupOnPersistenceFailure) {
     return await persist();
@@ -1225,6 +1227,7 @@ export async function installManagedPluginSource(params: {
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
   cleanupOnPersistenceFailure?: boolean;
+  publicationAuthority?: InstallPublicationAuthority;
 }): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -1250,6 +1253,7 @@ export async function installManagedPluginSource(params: {
     config: params.snapshot.config,
     extensionsDir,
     logger: params.logger,
+    publicationAuthority: params.publicationAuthority,
   };
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
@@ -1545,6 +1549,8 @@ export async function installManagedPlugin(params: {
       env,
       logger: installLogger,
       persistenceLogger: installLogger,
+      publicationAuthority:
+        params.request.installPolicyWarningAcknowledgement?.publicationAuthority,
       ...(params.request.installPolicyWarningAcknowledgement
         ? {
             safetyOverrides: {

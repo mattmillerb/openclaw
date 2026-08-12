@@ -52,6 +52,7 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { InstallPublicationOptions } from "./install-types.js";
 import {
   installPluginFromArchive,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -1207,22 +1208,23 @@ function logClawHubPackageSummary(params: {
 }
 
 export async function installPluginFromClawHub(
-  params: InstallSafetyOverrides & {
-    spec: string;
-    baseUrl?: string;
-    token?: string;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    extensionsDir?: string;
-    timeoutMs?: number;
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    expectedIntegrity?: string;
-    installPolicyRequestedSpecifier?: string;
-    env?: RuntimeVersionEnv;
-    acknowledgeClawHubRisk?: boolean;
-    onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
-  },
+  params: InstallSafetyOverrides &
+    InstallPublicationOptions & {
+      spec: string;
+      baseUrl?: string;
+      token?: string;
+      logger?: PluginInstallLogger;
+      mode?: "install" | "update";
+      extensionsDir?: string;
+      timeoutMs?: number;
+      dryRun?: boolean;
+      expectedPluginId?: string;
+      expectedIntegrity?: string;
+      installPolicyRequestedSpecifier?: string;
+      env?: RuntimeVersionEnv;
+      acknowledgeClawHubRisk?: boolean;
+      onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+    },
 ): Promise<
   | ({
       ok: true;
@@ -1445,6 +1447,7 @@ export async function installPluginFromClawHub(
     );
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
+      publicationAuthority: params.publicationAuthority,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       trustedSourceLinkedOfficialInstall:

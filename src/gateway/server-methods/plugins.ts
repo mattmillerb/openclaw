@@ -25,6 +25,7 @@ import {
   setManagedPluginEnabled,
   uninstallManagedPlugin,
   type ManagedPluginInstallRequest,
+  type ManagedPluginInstallPolicyAcknowledgement,
   type ManagedPluginSourceInstallRequest,
 } from "../../plugins/management-service.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -120,10 +121,41 @@ function issueInstallPolicyAcknowledgement(params: {
   return token;
 }
 
+function assertInstallPolicyGenerationCurrent(generation: number): void {
+  if (generation === installPolicyAcknowledgementState.generation) {
+    return;
+  }
+  throw new ManagedPluginLifecycleError(
+    "Gateway restarted before the approved install could be published. Retry the install to review the current warning.",
+    { kind: "unavailable" },
+  );
+}
+
+function createInstallPolicyPublicationAuthority(
+  generation: number,
+): ManagedPluginInstallPolicyAcknowledgement["publicationAuthority"] {
+  let committed = false;
+  const assertCurrent = () => {
+    if (!committed) {
+      assertInstallPolicyGenerationCurrent(generation);
+    }
+  };
+  return {
+    assertCurrent,
+    commit: () => {
+      if (committed) {
+        return;
+      }
+      assertCurrent();
+      committed = true;
+    },
+  };
+}
+
 function consumeInstallPolicyAcknowledgement(
   request: PluginsInstallParams,
   generation: number,
-): Pick<InstallPolicyAcknowledgement, "resolvedRequest" | "warnings"> | undefined {
+): ManagedPluginInstallPolicyAcknowledgement | undefined {
   const token = request.installPolicyWarningAcknowledgement;
   if (!token) {
     return undefined;
@@ -144,6 +176,7 @@ function consumeInstallPolicyAcknowledgement(
   return {
     resolvedRequest: acknowledgement.resolvedRequest,
     warnings: acknowledgement.warnings,
+    publicationAuthority: createInstallPolicyPublicationAuthority(generation),
   };
 }
 

@@ -975,6 +975,30 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     );
   });
 
+  it("checks publication authority immediately before the tentative index write", async () => {
+    const commitPublication = vi.fn(() => {
+      throw new Error("approval expired");
+    });
+
+    await expect(
+      commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: {},
+        nextInstallRecords: {
+          demo: {
+            source: "npm",
+            spec: "demo@1.0.0",
+          },
+        },
+        nextConfig: {},
+        commitPublication,
+      }),
+    ).rejects.toThrow("approval expired");
+
+    expect(commitPublication).toHaveBeenCalledOnce();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("leaves marker state intact when a successor owns the plugin index", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const installPath = path.join(

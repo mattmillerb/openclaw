@@ -320,6 +320,90 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("does not publish a staged install after its approval authority expires", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const installBaseDir = path.join(fixtureRoot, "plugins");
+    const targetDir = path.join(installBaseDir, "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+    const afterInstall = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      afterInstall,
+      publicationAuthority: {
+        assertCurrent: () => {},
+        commit: () => {
+          throw new Error("approval expired");
+        },
+      },
+    });
+
+    expect(afterInstall).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: approval expired",
+    });
+    await expectMissingPath(targetDir);
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+  });
+
+  it("restores an existing install when approval expires during publication", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
+    let approvalCurrent = true;
+    const assertCommitAllowed = vi.fn(() => {
+      if (!approvalCurrent) {
+        throw new Error("approval expired");
+      }
+      approvalCurrent = false;
+    });
+    const commitPublication = vi.fn(() => {
+      if (!approvalCurrent) {
+        throw new Error("approval expired");
+      }
+    });
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      publicationAuthority: {
+        assertCurrent: assertCommitAllowed,
+        commit: commitPublication,
+      },
+    });
+
+    expect(assertCommitAllowed).toHaveBeenCalledOnce();
+    expect(commitPublication).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: approval expired",
+    });
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+    await expect(
+      fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
+    ).resolves.toHaveLength(0);
+  });
+
   it("restores the original install if publish rename fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");

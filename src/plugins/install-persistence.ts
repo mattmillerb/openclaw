@@ -18,7 +18,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { enablePluginInConfig } from "./enable.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
-import type { PluginInstallLogger } from "./install-types.js";
+import type { InstallPublicationAuthority, PluginInstallLogger } from "./install-types.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
@@ -471,6 +471,7 @@ export async function persistPluginInstall(params: {
   warningMessage?: string;
   runtime?: RuntimeEnv;
   persistenceLogger?: PluginInstallLogger;
+  publicationAuthority?: InstallPublicationAuthority;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
@@ -544,6 +545,9 @@ export async function persistPluginInstall(params: {
         nextInstallRecords,
         nextConfig: next,
         baseHash: params.snapshot.baseHash,
+        ...(params.publicationAuthority
+          ? { commitPublication: params.publicationAuthority.commit }
+          : {}),
         writeOptions: {
           ...params.snapshot.writeOptions,
           afterWrite: { mode: "restart", reason: "plugin source changed" },

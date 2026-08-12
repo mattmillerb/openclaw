@@ -185,6 +185,10 @@ export async function installPackageDir<
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  publicationAuthority?: {
+    assertCurrent: () => void;
+    commit: () => void;
+  };
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
@@ -328,6 +332,7 @@ export async function installPackageDir<
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
+      params.publicationAuthority?.assertCurrent();
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
         sourceHardlinks,
@@ -343,6 +348,7 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    params.publicationAuthority?.commit();
     await movePathWithCopyFallback({
       from: stageDir,
       sourceHardlinks,

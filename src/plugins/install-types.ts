@@ -74,18 +74,28 @@ export type PluginInstallPolicyRequest = {
   source?: InstallPolicySource;
 };
 
-export type PackageInstallCommonParams = InstallSafetyOverrides & {
-  extensionsDir?: string;
-  npmDir?: string;
-  timeoutMs?: number;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  requirePluginManifest?: boolean;
-  allowSourceTypeScriptEntries?: boolean;
-  installPolicyRequest?: PluginInstallPolicyRequest;
+export type InstallPublicationAuthority = {
+  assertCurrent: () => void;
+  commit: () => void;
 };
+
+export type InstallPublicationOptions = {
+  publicationAuthority?: InstallPublicationAuthority;
+};
+
+export type PackageInstallCommonParams = InstallSafetyOverrides &
+  InstallPublicationOptions & {
+    extensionsDir?: string;
+    npmDir?: string;
+    timeoutMs?: number;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    requirePluginManifest?: boolean;
+    allowSourceTypeScriptEntries?: boolean;
+    installPolicyRequest?: PluginInstallPolicyRequest;
+  };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;

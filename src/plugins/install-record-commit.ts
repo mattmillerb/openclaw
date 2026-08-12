@@ -389,6 +389,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
   commit: ConfigCommit;
+  commitPublication?: () => void;
 }): Promise<{
   committed: ConfigReplaceResult | void;
   nextInstallRecords: Record<string, PluginInstallRecord>;
@@ -400,6 +401,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
     try {
       const storeOptions = { filePath: lease.databasePath };
       const prepared = await params.prepareInstallRecords(storeOptions);
+      params.commitPublication?.();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
         prepared.nextInstallRecords,
         {
@@ -469,6 +471,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
+  commitPublication?: () => void;
 }): Promise<void> {
   await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
@@ -478,6 +481,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       nextInstallRecords: params.nextInstallRecords,
     }),
     nextConfig: params.nextConfig,
+    ...(params.commitPublication ? { commitPublication: params.commitPublication } : {}),
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({

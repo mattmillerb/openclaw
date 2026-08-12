@@ -37,6 +37,7 @@ import {
 } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPublicationOptions,
   type InstallPluginResult,
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
@@ -44,21 +45,22 @@ import {
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 
 export async function installPluginFromNpmSpec(
-  params: InstallSafetyOverrides & {
-    spec: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    expectedReplacementPluginId?: string;
-    expectedIntegrity?: string;
-    installPolicyRequestedSpecifier?: string;
-    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-  },
+  params: InstallSafetyOverrides &
+    InstallPublicationOptions & {
+      spec: string;
+      extensionsDir?: string;
+      npmDir?: string;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      logger?: PluginInstallLogger;
+      mode?: "install" | "update";
+      dryRun?: boolean;
+      expectedPluginId?: string;
+      expectedReplacementPluginId?: string;
+      expectedIntegrity?: string;
+      installPolicyRequestedSpecifier?: string;
+      onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+    },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
@@ -257,6 +259,7 @@ export async function installPluginFromNpmSpec(
   }
 
   const result = await installPluginFromManagedNpmRoot({
+    publicationAuthority: params.publicationAuthority,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,

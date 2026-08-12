@@ -483,6 +483,10 @@ describe("plugin management Gateway handlers", () => {
         source: "clawhub",
         packageName: "community/plugin",
         installPolicyWarningAcknowledgement: {
+          publicationAuthority: {
+            assertCurrent: expect.any(Function),
+            commit: expect.any(Function),
+          },
           resolvedRequest: {
             source: "clawhub",
             spec: "clawhub:community/plugin@1.0.0",
@@ -533,6 +537,10 @@ describe("plugin management Gateway handlers", () => {
         source: "clawhub",
         packageName: "community/plugin",
         installPolicyWarningAcknowledgement: {
+          publicationAuthority: {
+            assertCurrent: expect.any(Function),
+            commit: expect.any(Function),
+          },
           resolvedRequest: {
             source: "clawhub",
             spec: "clawhub:community/plugin@1.0.0",
@@ -744,6 +752,109 @@ describe("plugin management Gateway handlers", () => {
     expect(managementMocks.install).toHaveBeenCalledOnce();
   });
 
+  it("rejects publication when an acknowledged install outlives a Gateway restart", async () => {
+    managementMocks.install.mockRejectedValueOnce(
+      new ManagedPluginLifecycleError("Install requires approval", {
+        installPolicyResolvedRequest: {
+          source: "official",
+          spec: "@openclaw/diffs@1.0.0",
+          pluginId: "diffs",
+          mode: "install",
+        },
+        installPolicyWarning: warningOccurrence({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review required",
+        }),
+      }),
+    );
+    const warning = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    const acknowledgementToken = expectDefined(
+      (warning.error as { details?: { acknowledgementToken?: unknown } }).details
+        ?.acknowledgementToken,
+      "expected install-policy acknowledgement token",
+    );
+    let resumeInstall!: () => void;
+    const installCanPublish = new Promise<void>((resolve) => {
+      resumeInstall = resolve;
+    });
+    managementMocks.install.mockImplementationOnce(async ({ request }) => {
+      await installCanPublish;
+      request.installPolicyWarningAcknowledgement?.publicationAuthority.commit();
+      return {
+        plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
+      };
+    });
+
+    const retry = callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+      installPolicyWarningAcknowledgement: acknowledgementToken,
+    });
+    await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledTimes(2));
+    await drainGlobalSingletonLifecycleState("restart");
+    resumeInstall();
+
+    expect((await retry).error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("Gateway restarted"),
+    });
+    expect(pluginMetadataChanged).not.toHaveBeenCalled();
+  });
+
+  it("lets an authorized publication finish after its first commit boundary", async () => {
+    managementMocks.install.mockRejectedValueOnce(
+      new ManagedPluginLifecycleError("Install requires approval", {
+        installPolicyResolvedRequest: {
+          source: "official",
+          spec: "@openclaw/diffs@1.0.0",
+          pluginId: "diffs",
+          mode: "install",
+        },
+        installPolicyWarning: warningOccurrence({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review required",
+        }),
+      }),
+    );
+    const warning = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+    const acknowledgementToken = expectDefined(
+      (warning.error as { details?: { acknowledgementToken?: unknown } }).details
+        ?.acknowledgementToken,
+      "expected install-policy acknowledgement token",
+    );
+    managementMocks.install.mockImplementationOnce(async ({ request }) => {
+      const commitPublication = expectDefined(
+        request.installPolicyWarningAcknowledgement?.publicationAuthority.commit,
+        "expected publication authority",
+      );
+      commitPublication();
+      await drainGlobalSingletonLifecycleState("restart");
+      commitPublication();
+      return {
+        plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
+      };
+    });
+
+    const retry = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+      installPolicyWarningAcknowledgement: acknowledgementToken,
+    });
+
+    expect(retry.ok).toBe(true);
+    expect(retry.response).toMatchObject({ ok: true, restartRequired: true });
+  });
+
   it("carries earlier approvals into a token for a later scan-stage warning", async () => {
     const warning: InstallPolicyWarningDetails = {
       targetName: "demo-plugin",
@@ -830,6 +941,10 @@ describe("plugin management Gateway handlers", () => {
         source: "clawhub",
         packageName: "community/plugin",
         installPolicyWarningAcknowledgement: {
+          publicationAuthority: {
+            assertCurrent: expect.any(Function),
+            commit: expect.any(Function),
+          },
           resolvedRequest,
           warnings: [firstWarning, secondWarning],
         },

@@ -29,6 +29,10 @@ export const officialDiffsWarningRequest = {
   source: "official",
   pluginId: "diffs",
   installPolicyWarningAcknowledgement: {
+    publicationAuthority: {
+      assertCurrent: () => {},
+      commit: () => {},
+    },
     resolvedRequest: {
       source: "clawhub",
       spec: "clawhub:@openclaw/diffs@2026.6.11",

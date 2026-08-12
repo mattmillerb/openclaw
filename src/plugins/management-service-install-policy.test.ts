@@ -202,6 +202,14 @@ describe("plugin management install-policy acknowledgements", () => {
         spec: "clawhub:@openclaw/diffs@2026.6.11",
         expectedPluginId: "diffs",
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
+        publicationAuthority:
+          officialDiffsWarningRequest.installPolicyWarningAcknowledgement.publicationAuthority,
+      }),
+    );
+    expect(mocks.persistInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicationAuthority:
+          officialDiffsWarningRequest.installPolicyWarningAcknowledgement.publicationAuthority,
       }),
     );
     await expectOneShotInstallPolicyWarningAcknowledgement(mocks.clawhubInstall);
@@ -372,6 +380,10 @@ describe("plugin management install-policy acknowledgements", () => {
           source: "official",
           pluginId: "npm-demo",
           installPolicyWarningAcknowledgement: {
+            publicationAuthority: {
+              assertCurrent: () => {},
+              commit: () => {},
+            },
             warnings: [warning],
             resolvedRequest,
           },

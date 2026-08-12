@@ -6,6 +6,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPublicationAuthority,
   type InstallPluginResult,
   type PackageManifest,
   type PluginInstallErrorCode,
@@ -380,6 +381,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   afterInstall?: (
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+  publicationAuthority?: InstallPublicationAuthority;
   nameEncoder?: (pluginId: string) => string;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -434,6 +436,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
       }
       return postInstallResult;
     },
+    publicationAuthority: params.publicationAuthority,
   });
   if (!installRes.ok) {
     return installRes;

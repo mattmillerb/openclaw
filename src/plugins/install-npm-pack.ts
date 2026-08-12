@@ -27,6 +27,7 @@ import {
 } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPublicationOptions,
   type InstallPluginResult,
   type PluginInstallErrorCode,
   type PluginInstallLogger,
@@ -156,19 +157,20 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 }
 
 export async function installPluginFromNpmPackArchive(
-  params: InstallSafetyOverrides & {
-    archivePath: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    expectedIntegrity?: string;
-    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-  },
+  params: InstallSafetyOverrides &
+    InstallPublicationOptions & {
+      archivePath: string;
+      extensionsDir?: string;
+      npmDir?: string;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      logger?: PluginInstallLogger;
+      mode?: "install" | "update";
+      dryRun?: boolean;
+      expectedPluginId?: string;
+      expectedIntegrity?: string;
+      onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+    },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
@@ -233,6 +235,7 @@ export async function installPluginFromNpmPackArchive(
         : targetMode;
 
   const result = await installPluginFromManagedNpmRoot({
+    publicationAuthority: params.publicationAuthority,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
