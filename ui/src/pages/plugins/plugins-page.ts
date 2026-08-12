@@ -785,24 +785,22 @@ class PluginsPage extends OpenClawLightDomElement {
       });
     },
     options: {
-      operationKey?: string;
       pendingInstallTarget?: string;
       preserveMessageWhilePending?: boolean;
     } = {},
   ): Promise<void> {
     const scope = this.gateway.capture();
-    const operationKey = options.operationKey ?? rowKey;
-    if (!scope || !this.canMutate() || this.busy[operationKey]) {
+    if (!scope || !this.canMutate() || this.busy[rowKey]) {
       return;
     }
     const mutationToken = ++this.mutationToken;
-    this.mutationTokens.set(operationKey, mutationToken);
+    this.mutationTokens.set(rowKey, mutationToken);
     if (options.pendingInstallTarget) {
       this.pendingInstallTargets.add(options.pendingInstallTarget);
     }
     const isCurrent = () =>
-      this.gateway.isCurrent(scope) && this.mutationTokens.get(operationKey) === mutationToken;
-    this.setBusy(operationKey, true);
+      this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
+    this.setBusy(rowKey, true);
     if (!options.preserveMessageWhilePending) {
       this.setMessage(rowKey, null);
     }
@@ -821,9 +819,9 @@ class PluginsPage extends OpenClawLightDomElement {
         onError(error);
       }
     } finally {
-      if (this.mutationTokens.get(operationKey) === mutationToken) {
-        this.mutationTokens.delete(operationKey);
-        this.setBusy(operationKey, false);
+      if (this.mutationTokens.get(rowKey) === mutationToken) {
+        this.mutationTokens.delete(rowKey);
+        this.setBusy(rowKey, false);
       }
       if (options.pendingInstallTarget) {
         this.pendingInstallTargets.delete(options.pendingInstallTarget);
@@ -837,18 +835,14 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async install(
-    rowKey: string,
-    request: PluginInstallRequest,
-    installIdentity: string,
-  ): Promise<void> {
+  private async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
     await this.runPluginMutation(
-      rowKey,
+      installIdentity,
       (client) => installPlugin(client, request),
       async (result, refreshError, client) => {
         this.applyMutationResult(result);
         this.setMessage(
-          rowKey,
+          installIdentity,
           committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
         );
         await this.refreshCatalogAfterMutation(client);
@@ -856,7 +850,7 @@ class PluginsPage extends OpenClawLightDomElement {
       (error) => {
         const policyWarning = readPluginInstallPolicyWarning(error);
         if (policyWarning) {
-          this.setMessage(rowKey, {
+          this.setMessage(installIdentity, {
             kind: "warning",
             text: policyWarning.reason,
             installPolicyWarning: { details: policyWarning, request },
@@ -866,7 +860,7 @@ class PluginsPage extends OpenClawLightDomElement {
         const trust = readPluginInstallTrustError(error);
         const packageName = request.source === "clawhub" ? request.packageName : null;
         if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.setMessage(rowKey, {
+          this.setMessage(installIdentity, {
             kind: "error",
             text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
             acknowledge: {
@@ -876,13 +870,12 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, {
+        this.setMessage(installIdentity, {
           kind: "error",
           text: formatUiError(error),
         });
       },
       {
-        operationKey: installIdentity,
         pendingInstallTarget: installIdentity,
         preserveMessageWhilePending: request.installPolicyWarningAcknowledgement !== undefined,
       },
@@ -1116,8 +1109,7 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request, installIdentity) =>
-            void this.install(rowKey, request, installIdentity),
+          onInstall: (request, installIdentity) => void this.install(request, installIdentity),
           onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onRetryInstallOutcome: () => void this.refreshCatalog(),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),

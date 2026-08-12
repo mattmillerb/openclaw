@@ -442,7 +442,6 @@ describe("renderPlugins", () => {
       .querySelector<HTMLButtonElement>('[data-plugin-id="tavily"] .plugins-install')
       ?.click();
     expect(onInstall).toHaveBeenCalledWith(
-      pluginRowKey("tavily"),
       {
         source: "official",
         pluginId: "tavily",
@@ -583,7 +582,6 @@ describe("renderPlugins", () => {
     expect(normalizedText(result)).toContain("Code plugin");
     result?.querySelector<HTMLButtonElement>('[aria-label="Install Calendar Plus"]')?.click();
     expect(onInstall).toHaveBeenCalledWith(
-      clawHubKey("@openclaw/calendar-plus"),
       {
         source: "clawhub",
         packageName: "@openclaw/calendar-plus",
@@ -663,7 +661,6 @@ describe("renderPlugins", () => {
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
     row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
     expect(onInstall).toHaveBeenCalledWith(
-      key,
       {
         source: "clawhub",
         packageName,
@@ -773,7 +770,6 @@ describe("renderPlugins", () => {
 
     actionButton(alert, "Install anyway")?.click();
     expect(onInstall).toHaveBeenCalledWith(
-      key,
       {
         ...request,
         installPolicyWarningAcknowledgement: "approval-token",
@@ -837,6 +833,89 @@ describe("renderPlugins", () => {
     expect(onRetryInstallOutcome).toHaveBeenCalledOnce();
   });
 
+  it("shares one install-policy review across catalog, search, and detail aliases", () => {
+    const plugin = createPlugin({
+      id: "lobster",
+      name: "Lobster",
+      packageName: "@openclaw/lobster",
+      installed: false,
+      enabled: false,
+      state: "disabled",
+      install: { source: "official", pluginId: "lobster" },
+    });
+    const identity = pluginRowKey(plugin.id);
+    const request = { source: "official", pluginId: "lobster" } as const;
+    const onInstall = vi.fn();
+    const onDismissMessage = vi.fn();
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "lobster",
+        result: createResult([plugin]),
+        detailPluginId: plugin.id,
+        searchResults: [
+          {
+            score: 1,
+            package: {
+              name: "@openclaw/lobster",
+              displayName: "Lobster",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              runtimeId: "lobster",
+            },
+          },
+        ],
+        messages: {
+          [identity]: {
+            kind: "warning",
+            text: "Review this plugin.",
+            installPolicyWarning: {
+              request,
+              details: {
+                installPolicyCode: "install_policy_warning_acknowledgement_required",
+                targetName: "@openclaw/lobster",
+                targetType: "plugin",
+                requestMode: "install",
+                reason: "Review this plugin.",
+                acknowledgementToken: "approval-token",
+              },
+            },
+          },
+        },
+        onInstall,
+        onDismissMessage,
+      }),
+    );
+
+    const catalogRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-plugin-id="lobster"]'),
+      "catalog row",
+    );
+    const searchRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-package-name="@openclaw/lobster"]'),
+      "search row",
+    );
+    const detail = expectDefined(
+      container.querySelector<HTMLElement>('[data-detail-plugin-id="lobster"]'),
+      "detail",
+    );
+    for (const surface of [catalogRow, searchRow, detail]) {
+      expect(normalizedText(surface.querySelector('[role="alert"]'))).toContain(
+        "Review this plugin.",
+      );
+      expect(actionButton(surface, "Install Lobster")).toBeNull();
+    }
+
+    actionButton(searchRow, "Install anyway")?.click();
+    expect(onInstall).toHaveBeenCalledWith(
+      { ...request, installPolicyWarningAcknowledgement: "approval-token" },
+      identity,
+    );
+    actionButton(detail, "Cancel")?.click();
+    expect(onDismissMessage).toHaveBeenCalledWith(identity);
+  });
+
   it("preserves a search-only runtime identity when installing", () => {
     const onInstall = vi.fn();
     const container = mount(
@@ -863,7 +942,6 @@ describe("renderPlugins", () => {
 
     actionButton(container, "Install Lobster")?.click();
     expect(onInstall).toHaveBeenCalledWith(
-      "clawhub:@openclaw/lobster",
       { source: "clawhub", packageName: "@openclaw/lobster" },
       "plugin:lobster",
     );

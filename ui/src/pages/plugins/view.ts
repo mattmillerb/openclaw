@@ -106,7 +106,7 @@ type PluginsViewProps = {
   onIconError: (pluginId: string) => void;
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
-  onInstall: (rowKey: string, request: PluginInstallRequest, installIdentity: string) => void;
+  onInstall: (request: PluginInstallRequest, installIdentity: string) => void;
   onDismissMessage: (rowKey: string) => void;
   onRetryInstallOutcome: () => void;
   onRequestUninstall: (rowKey: string) => void;
@@ -407,12 +407,11 @@ function originLabel(origin: string): string {
 
 function requestInstall(
   props: PluginsViewProps,
-  rowKey: string,
   request: PluginInstallRequest,
   installIdentity?: string,
 ) {
   if (installIdentity) {
-    props.onInstall(rowKey, request, installIdentity);
+    props.onInstall(request, installIdentity);
   }
 }
 
@@ -438,6 +437,8 @@ function renderRowMessage(
   installOutcome?: InstallOutcomeReconciliation,
   installIdentity?: string,
 ) {
+  const messageKey = message ? key : (installIdentity ?? key);
+  message ??= installIdentity ? props.messages[installIdentity] : undefined;
   if (installOutcome) {
     return html`
       <div
@@ -544,7 +545,7 @@ function renderRowMessage(
             type="button"
             class="btn btn--sm"
             ?disabled=${busy}
-            @click=${() => props.onDismissMessage(key)}
+            @click=${() => props.onDismissMessage(messageKey)}
           >
             ${t("pluginsPage.cancel")}
           </button>
@@ -556,7 +557,6 @@ function renderRowMessage(
             @click=${() =>
               requestInstall(
                 props,
-                key,
                 {
                   ...request,
                   installPolicyWarningAcknowledgement: details.acknowledgementToken,
@@ -584,7 +584,6 @@ function renderRowMessage(
               @click=${() =>
                 requestInstall(
                   props,
-                  key,
                   {
                     source: "clawhub",
                     packageName: message.acknowledge?.packageName ?? "",
@@ -665,11 +664,14 @@ function renderRemoveButton(
 function renderInstallButton(
   props: PluginsViewProps,
   busy: boolean,
-  key: string,
   name: string,
   request: PluginInstallRequest,
   installIdentity: string,
 ) {
+  const installMessage = props.messages[installIdentity];
+  if (installMessage?.installPolicyWarning || installMessage?.acknowledge) {
+    return nothing;
+  }
   const installOutcome = props.installOutcomeReconciliations[installIdentity];
   return html`
     <button
@@ -680,7 +682,7 @@ function renderInstallButton(
       ?disabled=${!props.canMutate || busy}
       @click=${(event: Event) => {
         event.stopPropagation();
-        props.onInstall(key, request, installIdentity);
+        props.onInstall(request, installIdentity);
       }}
     >
       ${busy
@@ -746,7 +748,6 @@ function renderCatalogActions(
       ? renderInstallButton(
           props,
           busy,
-          rowKey,
           plugin.name,
           install,
           resolveInstallIdentity(props, install),
@@ -1145,7 +1146,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       <div class="settings-row__control">
         ${installed
           ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
-          : renderInstallButton(props, busy, key, pkg.displayName, installRequest, installIdentity)}
+          : renderInstallButton(props, busy, pkg.displayName, installRequest, installIdentity)}
       </div>
       ${renderRowMessage(
         key,
@@ -1339,7 +1340,6 @@ function renderDetailOverlay(props: PluginsViewProps) {
                       ? renderInstallButton(
                           props,
                           busy,
-                          key,
                           plugin.name,
                           plugin.install,
                           resolveInstallIdentity(props, plugin.install),

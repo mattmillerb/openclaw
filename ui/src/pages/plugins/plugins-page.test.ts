@@ -235,20 +235,18 @@ describe("PluginsPage", () => {
       createContext(harness.gateway),
       createPluginsRouteData(harness.gateway, lobsterCatalog),
     );
-    const rowKey = "clawhub:@openclaw/lobster";
     const installIdentity = "plugin:lobster";
     const installRequest = {
       source: "clawhub",
       packageName: "@openclaw/lobster",
     } satisfies PluginInstallRequest;
 
-    await page.install(rowKey, installRequest, installIdentity);
-    expect(page.messages[rowKey]?.installPolicyWarning?.details.acknowledgementToken).toBe(
+    await page.install(installRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.acknowledgementToken).toBe(
       "approval-token",
     );
 
     const pendingRetry = page.install(
-      rowKey,
       {
         ...installRequest,
         installPolicyWarningAcknowledgement: "approval-token",
@@ -258,9 +256,9 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2),
     );
-    await page.install("plugin:lobster", installRequest, installIdentity);
+    await page.install(installRequest, installIdentity);
     expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2);
-    expect(page.messages[rowKey]?.installPolicyWarning).toBeDefined();
+    expect(page.messages[installIdentity]?.installPolicyWarning).toBeDefined();
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
     harness.emit(client, false);
@@ -268,7 +266,7 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(1),
     );
-    expect(page.messages[rowKey]).toBeUndefined();
+    expect(page.messages[installIdentity]).toBeUndefined();
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
     expect(page.installOutcomeReconciliations[installIdentity]).toBe("checking");
 
@@ -286,8 +284,71 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(page.installOutcomeReconciliations[installIdentity]).toBeUndefined(),
     );
-    expect(page.messages[rowKey]).toBeUndefined();
+    expect(page.messages[installIdentity]).toBeUndefined();
     expect(page.result?.plugins[0]?.installed).toBe(true);
+  });
+
+  it("owns install-policy reviews by install identity across row aliases", async () => {
+    let installCalls = 0;
+    const { client } = createClient(async (method) => {
+      if (method !== "plugins.install") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      installCalls += 1;
+      if (installCalls <= 2) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "install requires review",
+          details: {
+            installPolicyCode: "install_policy_warning_acknowledgement_required",
+            targetName: "@openclaw/lobster",
+            targetType: "plugin",
+            requestMode: "install",
+            reason: `Review this plugin (${installCalls}).`,
+            acknowledgementToken: `approval-token-${installCalls}`,
+          },
+        });
+      }
+      return {
+        ok: true,
+        plugin: createPlugin({ id: "lobster", name: "Lobster", installed: true }),
+        restartRequired: false,
+      } satisfies PluginMutationResult;
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
+    );
+    const installIdentity = "plugin:lobster";
+    const catalogRequest = {
+      source: "official",
+      pluginId: "lobster",
+    } satisfies PluginInstallRequest;
+    const searchRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/lobster",
+    } satisfies PluginInstallRequest;
+    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
+
+    await page.install(catalogRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.acknowledgementToken).toBe(
+      "approval-token-1",
+    );
+
+    await page.install(searchRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.acknowledgementToken).toBe(
+      "approval-token-2",
+    );
+
+    await page.install(
+      { ...searchRequest, installPolicyWarningAcknowledgement: "approval-token-2" },
+      installIdentity,
+    );
+
+    expect(page.messages[installIdentity]?.installPolicyWarning).toBeUndefined();
+    expect(page.messages[installIdentity]?.kind).toBe("success");
+    expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
   });
 
   it("keeps an unknown install outcome blocked until a failed catalog check is retried", async () => {
@@ -349,9 +410,8 @@ describe("PluginsPage", () => {
       packageName: "@openclaw/lobster",
     } satisfies PluginInstallRequest;
 
-    await page.install(rowKey, installRequest, rowKey);
+    await page.install(installRequest, rowKey);
     const pendingRetry = page.install(
-      rowKey,
       {
         ...installRequest,
         installPolicyWarningAcknowledgement: "approval-token",
@@ -591,7 +651,6 @@ describe("PluginsPage", () => {
 
       if (action === "install") {
         await page.install(
-          "search:example-plugin",
           {
             source: "clawhub",
             packageName: "example-plugin",

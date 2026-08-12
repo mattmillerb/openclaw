@@ -708,7 +708,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
-      methodResponses: pluginMethodResponses(),
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.search": lobsterSearchResponse,
+      },
     });
 
     try {
@@ -740,6 +743,14 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await review.textContent()).toContain("Warning");
       expect(await review.textContent()).toContain("Semgrep found a risky command.");
       expect(await review.textContent()).not.toContain("raw terminal install-policy output");
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
+      await gateway.waitForRequest("plugins.search");
+      const searchRow = page.locator('[data-package-name="@openclaw/lobster"]');
+      const searchReview = searchRow.getByRole("alert");
+      await searchReview.waitFor({ state: "visible" });
+      expect(
+        await searchRow.getByRole("button", { name: "Install Lobster", exact: true }).count(),
+      ).toBe(0);
       await captureScreenshot(page, "09-policy-review-desktop.png");
 
       await page.setViewportSize(mobileViewport);
@@ -756,8 +767,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await captureScreenshot(page, "09-policy-review-mobile.png");
 
       const installCountBeforeCancel = (await gateway.getRequests("plugins.install")).length;
-      await review.getByRole("button", { name: "Cancel", exact: true }).click();
+      await searchReview.getByRole("button", { name: "Cancel", exact: true }).click();
       await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
       expect((await gateway.getRequests("plugins.install")).length).toBe(installCountBeforeCancel);
       await page.setViewportSize(desktopViewport);
 
@@ -774,7 +786,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.install");
-      await review.getByRole("button", { name: "Install anyway", exact: true }).click();
+      await searchReview.getByRole("button", { name: "Install anyway", exact: true }).click();
       const retry = await waitForNextRequest(gateway, "plugins.install", installCountBeforeRetry);
       expect(requestParams(retry)).toEqual({
         source: "clawhub",
@@ -824,6 +836,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .locator('[data-plugin-id="lobster"][data-plugin-status="enabled"]')
         .waitFor({ state: "visible" });
       await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
+      expect(await page.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
+        0,
+      );
     } finally {
       await context.close();
     }
