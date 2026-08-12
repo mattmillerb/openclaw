@@ -43,14 +43,19 @@ async function captureProof(page: Page, theme: "dark" | "light", state: string) 
 }
 
 suite.define(() => {
-  it.each(["dark", "light"] as const)(
-    "floats the complete composer dock over a reachable transcript in %s mode",
-    async (theme) => {
+  it.each([
+    ["dark", "desktop", 1440, 900],
+    ["light", "desktop", 1440, 900],
+    ["dark", "mobile", 393, 852],
+    ["light", "mobile", 393, 852],
+  ] as const)(
+    "floats the complete composer dock over a reachable transcript in %s %s mode",
+    async (theme, viewportName, viewportWidth, viewportHeight) => {
       const context = await suite.newBrowserContext({
         colorScheme: theme,
         locale: "en-US",
         serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
+        viewport: { height: viewportHeight, width: viewportWidth },
       });
       const page = await context.newPage();
       const baseTs = Date.now() - 100_000;
@@ -117,11 +122,17 @@ suite.define(() => {
           });
         });
         await page.locator(".app-toast").waitFor({ state: "visible" });
-        await captureProof(page, theme, "backscroll");
+        await captureProof(page, theme, `${viewportName}-backscroll`);
 
         const conversation = page.locator(".chat-main__conversation");
         const thread = page.locator(".chat-thread");
         const dock = page.locator(".chat-bottom-dock");
+        if ((await dock.count()) === 0 && proofStage === "before") {
+          await scrollToLatest.click();
+          await waitForChatScrollIdle(page);
+          await captureProof(page, theme, `${viewportName}-exact-end`);
+          return;
+        }
         await dock.waitFor({ state: "visible" });
         const readDockLayout = () =>
           conversation.evaluate((element) => {
@@ -201,7 +212,7 @@ suite.define(() => {
         expect(tailBox).not.toBeNull();
         const tailBottom = tailBox ? tailBox.y + tailBox.height : endLayout.dockTop;
         expect(endLayout.dockTop - tailBottom).toBeGreaterThanOrEqual(0);
-        await captureProof(page, theme, "exact-end");
+        await captureProof(page, theme, `${viewportName}-exact-end`);
 
         for (let index = 0; index < 24; index += 1) {
           await textarea.fill(
@@ -250,6 +261,7 @@ suite.define(() => {
         const finalQueuedBottom = finalQueuedBox ? finalQueuedBox.y + finalQueuedBox.height : 0;
         const adjunctBottom = adjunctBox ? adjunctBox.y + adjunctBox.height : 0;
         expect(finalQueuedBottom).toBeLessThanOrEqual(adjunctBottom + 1);
+        await captureProof(page, theme, `${viewportName}-adjunct-overflow`);
       } finally {
         await context.close();
       }
