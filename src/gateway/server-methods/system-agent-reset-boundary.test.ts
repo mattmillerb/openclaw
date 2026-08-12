@@ -10,8 +10,13 @@ import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "../../system-agent/system-agent.test-helpers.js";
-import { appendTranscriptTurn, readTranscriptTail } from "../../system-agent/transcript-store.js";
+import {
+  appendTranscriptReset,
+  appendTranscriptTurn,
+  readTranscriptTail,
+} from "../../system-agent/transcript-store.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { setSystemAgentRecoveryHistory } from "./system-agent-chat-history.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -133,6 +138,139 @@ async function withTranscriptState(prefix: string, run: () => Promise<void>): Pr
 }
 
 describe("openclaw.chat reset boundary", () => {
+  it("recovers the live session transcript without global pre-reset turns", async () => {
+    await withTranscriptState("openclaw-session-recovery-boundary-", async () => {
+      appendTranscriptTurn({ role: "user", text: "discarded setup request", at: 1 });
+      appendTranscriptTurn({ role: "assistant", text: "discarded setup reply", at: 2 });
+      appendTranscriptReset();
+      const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+      const engine = new SystemAgentChatEngine(
+        {
+          surface: "gateway",
+          verifiedInference: fixture.binding,
+          deps: {
+            ...fixture.deps,
+            readConfigFileSnapshot: async () =>
+              ({
+                exists: true,
+                valid: true,
+                path: "/tmp/openclaw.json",
+                hash: "verified-config",
+                config: verifiedConfig,
+                runtimeConfig: verifiedConfig,
+                sourceConfig: verifiedConfig,
+                issues: [],
+              }) as never,
+          },
+        },
+        {
+          wizardDependencies: {
+            runChannelSetupWizard: async (_channel, prompter) => {
+              await prompter.text({ message: "Bot token" });
+            },
+          },
+        },
+      );
+      const sessions = new Map<string, SystemAgentChatSession>([
+        [
+          "recover-session",
+          {
+            engine,
+            welcome: "welcome text",
+            lastUsedAt: 1,
+            ownerKey: "device:device-test",
+          },
+        ],
+      ]);
+      const context = { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
+      const chatResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+      await expectDefined(
+        systemAgentHandlers["openclaw.chat"],
+        'systemAgentHandlers["openclaw.chat"] test invariant',
+      )({
+        params: { sessionId: "recover-session", message: "connect telegram" },
+        client,
+        context,
+        respond: (ok: boolean, payload?: unknown, error?: unknown) =>
+          chatResponses.push({ ok, payload, error }),
+      } as never);
+
+      expect(chatResponses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            wizardInputPending: true,
+            step: expect.objectContaining({ message: "Bot token" }),
+          }),
+          error: undefined,
+        },
+      ]);
+      const historyResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await expectDefined(
+        systemAgentHandlers["openclaw.chat.history"],
+        'systemAgentHandlers["openclaw.chat.history"] test invariant',
+      )({
+        params: { sessionId: "recover-session" },
+        client,
+        context,
+        respond: (ok: boolean, payload?: unknown, error?: unknown) =>
+          historyResponses.push({ ok, payload, error }),
+      } as never);
+
+      expect(historyResponses[0]).toMatchObject({
+        ok: true,
+        payload: {
+          turns: [
+            { role: "user", text: "connect telegram" },
+            { role: "assistant", text: expect.any(String) },
+          ],
+          activeWizard: expect.objectContaining({ sessionId: "recover-session" }),
+        },
+      });
+      expect(historyResponses[0]).not.toHaveProperty("payload.turns.0.sessionId");
+    });
+  });
+
+  it("keeps another live session's recovery turns when one session resets", async () => {
+    await withTranscriptState("openclaw-session-reset-isolation-", async () => {
+      const recoveryTurns = [
+        { role: "user" as const, text: "other live question", at: 1 },
+        { role: "assistant" as const, text: "other live answer", at: 2 },
+      ];
+      const sessions = discardableSessions(async () => undefined);
+      const engine = {
+        activeWizardStep: vi.fn(async () => undefined),
+      };
+      sessions.set("s2", {
+        engine,
+        welcome: "welcome text",
+        lastUsedAt: 2,
+        ownerKey: "device:device-test",
+      } as unknown as SystemAgentChatSession);
+      setSystemAgentRecoveryHistory(engine, recoveryTurns);
+      inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
+        ok: false,
+        status: "unavailable",
+        error: "no configured model",
+      });
+
+      await resetSession({ sessions });
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await expectDefined(
+        systemAgentHandlers["openclaw.chat.history"],
+        'systemAgentHandlers["openclaw.chat.history"] test invariant',
+      )({
+        params: { sessionId: "s2" },
+        client,
+        context: { systemAgentSessions: sessions } as unknown as GatewayRequestContext,
+        respond: (ok: boolean, payload?: unknown) => responses.push({ ok, payload }),
+      } as never);
+
+      expect(responses).toEqual([{ ok: true, payload: { turns: recoveryTurns } }]);
+    });
+  });
+
   // The reset discards the live session before initialization runs, so the
   // durable boundary has to survive a failed replacement. Otherwise the next
   // ordinary session seeds from the pre-reset transcript and undoes the reset.

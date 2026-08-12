@@ -2,6 +2,7 @@
 import type {
   SystemAgentWizardCancel,
   WizardAnswer,
+  WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -185,6 +186,17 @@ export class SystemAgentChatEngine {
     });
     this.turnQueue = turn.catch(() => undefined);
     return await turn;
+  }
+
+  async activeWizardStep(): Promise<WizardStep | undefined> {
+    // Recovery snapshots share the turn queue so they cannot observe a step
+    // while its answer or cancellation mutation is still in flight.
+    const snapshot = this.turnQueue.then(() => this.wizard.clientStep);
+    this.turnQueue = snapshot.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await snapshot;
   }
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {

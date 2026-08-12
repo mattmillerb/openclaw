@@ -269,6 +269,11 @@ export class ChatWizardHost {
     return this.bridge?.step?.sensitive === true;
   }
 
+  get clientStep(): WizardStep | undefined {
+    const step = this.bridge?.step;
+    return step ? sanitizeWizardStepForClient(step) : undefined;
+  }
+
   dispose(): void {
     this.bridge?.session.cancel();
     this.bridge = null;
@@ -281,7 +286,7 @@ export class ChatWizardHost {
         ? { ...reply, text: `${reply.text}\n${WIZARD_CANCEL_HINT}` }
         : reply;
     const question = wizardStepChatQuestion(step);
-    const clientStep = step ? sanitizeWizardStepForClient(step) : null;
+    const clientStep = this.clientStep;
     return {
       ...completedReply,
       ...(step?.sensitive === true ? { sensitive: true } : {}),

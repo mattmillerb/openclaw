@@ -6,11 +6,11 @@ import {
   ErrorCodes,
   errorShape,
   validateSystemAgentChatParams,
-  validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
+  type SystemAgentChatHistoryTurn,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -18,16 +18,12 @@ import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   SystemAgentChatEngine,
   SystemAgentWizardAnswerError,
 } from "../../system-agent/chat-engine.js";
-import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
   buildSystemAgentGreetingQuestion,
@@ -56,14 +52,21 @@ import {
   SETUP_ADMISSION_BUSY_MESSAGE,
   SetupAdmissionBusyError,
 } from "./setup-admission.js";
+import {
+  appendSystemAgentRecoveryHistory,
+  resolveSystemAgentSessionOwnerKey,
+  setSystemAgentRecoveryHistory,
+  systemAgentChatHistoryHandler,
+} from "./system-agent-chat-history.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
   buildSystemAgentChatResult,
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
-import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import type { RespondFn } from "./types.js";
+import { runSystemAgentGatewayTask } from "./system-agent-gateway-queue.js";
+import { getSystemAgentSessionQueue } from "./system-agent-session-queue.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -72,35 +75,17 @@ import { assertValidParams } from "./validation.js";
  * the pre-inference phase; a new chat session starts only after a live model
  * turn succeeds.
  *
- * The bounded session map owns only in-flight wizard and approval state. The
- * sanitized conversation is a durable machine-wide logbook; `reset: true`
- * replaces the in-memory session without deleting that transcript.
+ * The bounded session map owns in-flight wizard, approval, and recovery state.
+ * The sanitized conversation is also a durable machine-wide logbook;
+ * `reset: true` replaces the in-memory session without deleting that audit log.
  */
 export type SystemAgentChatSession =
   GatewayRequestContext["systemAgentSessions"] extends Map<string, infer Session> ? Session : never;
 
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
-const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
-const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
-const systemAgentSessionQueues = new WeakMap<
-  Map<string, SystemAgentChatSession>,
-  KeyedAsyncQueue
->();
-
-function getSystemAgentSessionQueue(
-  sessions: Map<string, SystemAgentChatSession>,
-): KeyedAsyncQueue {
-  let queue = systemAgentSessionQueues.get(sessions);
-  if (!queue) {
-    queue = new KeyedAsyncQueue();
-    systemAgentSessionQueues.set(sessions, queue);
-  }
-  return queue;
-}
 
 function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
   const auditSequence = session.welcomeAuditSequence;
@@ -109,42 +94,6 @@ function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession)
   }
   acknowledgeSystemAgentGreetingDelivery({ auditSequence });
   delete session.welcomeAuditSequence;
-}
-
-async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> {
-  // Track every accepted RPC as active, never queued: restart draining snapshots
-  // active ids, so a queued OpenClaw request could otherwise outlive its socket.
-  setCommandLaneConcurrency(CommandLane.SystemAgent, Number.MAX_SAFE_INTEGER);
-  return await enqueueCommandInLane(CommandLane.SystemAgent, () =>
-    // Bound expensive detection, activation, and agent turns without hiding
-    // accepted work from restart draining. This also makes session eviction and
-    // setup writes atomic with respect to other OpenClaw gateway requests.
-    systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
-  );
-}
-
-function resolveSystemAgentSessionOwnerKey(params: {
-  delegation?: { agentId?: string; sessionKey?: string };
-  client: GatewayClient | null;
-}): string | undefined {
-  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
-  if (delegationKey !== undefined) {
-    // Delegation is the host-only, cross-connection owner asserted by the regular-agent
-    // tool path. Keep its agent/session tuple authoritative across gateway reconnects.
-    return delegationKey;
-  }
-  // Authenticated users survive reconnects and may span paired devices. Otherwise
-  // bind to the verified device, with the server-issued connection as a last resort.
-  const userId = params.client?.authenticatedUserId?.trim();
-  if (userId) {
-    return `user:${userId}`;
-  }
-  const deviceId = params.client?.connect.device?.id.trim();
-  if (deviceId) {
-    return `device:${deviceId}`;
-  }
-  const connId = params.client?.connId?.trim();
-  return connId ? `connection:${connId}` : undefined;
 }
 
 async function evictOldestSession(
@@ -172,13 +121,18 @@ async function evictOldestSession(
   }
 }
 
-function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
+function persistEngineHistory(
+  engine: SystemAgentChatSession["engine"],
+  startIndex: number,
+): SystemAgentChatHistoryTurn[] {
   const at = Date.now();
-  for (const turn of engine.historySince(startIndex)) {
+  const turns = engine.historySince(startIndex).map((turn) => ({ ...turn, at }));
+  for (const turn of turns) {
     // Engine history is authoritative here: sensitive user text has already
     // been replaced by the mask marker before it crosses this boundary.
-    appendTranscriptTurn({ ...turn, at });
+    appendTranscriptTurn(turn);
   }
+  return turns;
 }
 
 function queueDelegatedApproval(params: {
@@ -263,23 +217,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "openclaw.chat.history": ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSystemAgentChatHistoryParams,
-        "openclaw.chat.history",
-        respond,
-      )
-    ) {
-      return;
-    }
-    respond(
-      true,
-      { turns: readTranscriptTail(params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT) },
-      undefined,
-    );
-  },
+  "openclaw.chat.history": systemAgentChatHistoryHandler,
   /** Structured onboarding: list reusable AI access on this host. */
   "openclaw.setup.detect": async ({ params, respond }) => {
     if (
@@ -636,7 +574,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
-          persistEngineHistory(engine, welcomeHistoryStart);
+          const recoveryTurns = persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);
           session = {
             engine,
@@ -648,6 +586,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             lastUsedAt: Date.now(),
             ownerKey,
           };
+          setSystemAgentRecoveryHistory(engine, recoveryTurns);
           sessions.set(sessionId, session);
           if (welcomeOnly) {
             respond(
@@ -701,7 +640,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           }
           reply = turnReply;
         } catch (error) {
-          persistEngineHistory(session.engine, historyStart);
+          appendSystemAgentRecoveryHistory(
+            session.engine,
+            persistEngineHistory(session.engine, historyStart),
+          );
           if (error instanceof SystemAgentWizardAnswerError) {
             respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
             return;
@@ -730,7 +672,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        persistEngineHistory(session.engine, historyStart);
+        appendSystemAgentRecoveryHistory(
+          session.engine,
+          persistEngineHistory(session.engine, historyStart),
+        );
         const delegation = params.delegation;
         let proposalId: string | undefined;
         if (delegation) {
