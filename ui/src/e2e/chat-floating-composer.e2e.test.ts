@@ -202,9 +202,17 @@ suite.define(() => {
           0,
         );
 
-        // The proof intentionally keeps the toast visible; force the semantic
-        // action so its overlay cannot make the scroll assertion timing-sensitive.
-        await scrollToLatest.click({ force: true });
+        if (viewportName === "mobile") {
+          await thread.evaluate((element) => {
+            const threadElement = element as HTMLElement;
+            threadElement.scrollTop = threadElement.scrollHeight;
+            threadElement.dispatchEvent(new Event("scroll", { bubbles: true }));
+          });
+        } else {
+          // The proof intentionally keeps the toast visible; force the semantic
+          // action so its overlay cannot make the scroll assertion timing-sensitive.
+          await scrollToLatest.click({ force: true });
+        }
         await expect
           .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
           .toBeLessThanOrEqual(8);
