@@ -363,6 +363,11 @@ class PluginsPage extends OpenClawLightDomElement {
     void this.configTask.run([null, this.context.runtimeConfig]);
     void this.searchTask.run([null, ""]);
     this.mutationTokens.clear();
+    // A connection-epoch change makes the one-shot approval outcome unknown;
+    // retire its action so reconnect cannot resend a spent or process-stale token.
+    this.messages = Object.fromEntries(
+      Object.entries(this.messages).filter(([, message]) => !message.installPolicyWarning),
+    );
   }
 
   private replaceResult(result: PluginListResult | null, preserveIcons = false) {

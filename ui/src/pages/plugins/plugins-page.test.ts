@@ -2,12 +2,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
   PluginInstallRequest,
   PluginListResult,
+  PluginMutationResult,
   PluginSearchResult,
 } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -197,6 +199,72 @@ describe("PluginsPage", () => {
       {},
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("retires a pending install-policy review across a same-client reconnect", async () => {
+    const retry = deferred<PluginMutationResult>();
+    let installCalls = 0;
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.install") {
+        installCalls += 1;
+        if (installCalls === 1) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "install requires review",
+            details: {
+              installPolicyCode: "install_policy_warning_acknowledgement_required",
+              targetName: "@openclaw/lobster",
+              targetType: "plugin",
+              requestMode: "install",
+              reason: "Review this plugin.",
+              acknowledgementToken: "approval-token",
+            },
+          });
+        }
+        return retry.promise;
+      }
+      if (method === "plugins.list") {
+        return createResult();
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
+    );
+    const rowKey = "plugin:@openclaw/lobster";
+    const installRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/lobster",
+    } satisfies PluginInstallRequest;
+
+    await page.install(rowKey, installRequest);
+    expect(page.messages[rowKey]?.installPolicyWarning?.details.acknowledgementToken).toBe(
+      "approval-token",
+    );
+
+    const pendingRetry = page.install(rowKey, {
+      ...installRequest,
+      installPolicyWarningAcknowledgement: "approval-token",
+    });
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(2),
+    );
+    expect(page.messages[rowKey]?.installPolicyWarning).toBeDefined();
+
+    harness.emit(client, false);
+    harness.emit(client, true);
+    await page.updateComplete;
+    expect(page.messages[rowKey]).toBeUndefined();
+
+    retry.resolve({
+      ok: true,
+      plugin: createPlugin({ id: "lobster", name: "Lobster" }),
+      restartRequired: true,
+    });
+    await pendingRetry;
+    expect(page.messages[rowKey]).toBeUndefined();
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {

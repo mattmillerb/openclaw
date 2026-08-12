@@ -813,6 +813,53 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
+  it("retires a pending install-policy review after reconnect", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/plugins`);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const row = page.locator('[data-plugin-id="lobster"]');
+      await row.waitFor({ state: "visible" });
+
+      await gateway.deferNext("plugins.install");
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await gateway.waitForRequest("plugins.install");
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "install requires review",
+        details: installPolicyWarning,
+      });
+
+      const review = row.getByRole("alert");
+      await review.waitFor({ state: "visible" });
+      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await review.getByRole("button", { name: "Install anyway", exact: true }).click();
+      await waitForNextRequest(gateway, "plugins.install", installCountBeforeRetry);
+      await review.getByRole("button", { name: "Installing…", exact: true }).waitFor();
+
+      const socketsBeforeReconnect = await gateway.getSocketCount();
+      await gateway.closeLatest(1001, "install-policy reconnect proof");
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketsBeforeReconnect);
+
+      await review.waitFor({ state: "detached" });
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).waitFor();
+      expect(await row.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
+        0,
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps plugin mutations unavailable to read-only operators while browse and search work", async () => {
     const context = await newContext();
     const page = await context.newPage();
