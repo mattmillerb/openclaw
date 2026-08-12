@@ -4,19 +4,32 @@ import fs from "node:fs";
 import path from "node:path";
 import { readFlagValue } from "./arg-utils.mts";
 import { createManagedCommandInvocation } from "./managed-child-process.mts";
+import { TSGO_CORE_TEST_SHARDS } from "./tsgo-core-test-shards.mts";
 
+const PACKAGE_TEST_CONFIGS = new Set(["tsconfig.test.packages.json"]);
 const CORE_TEST_CONFIGS = new Set([
   "tsconfig.core.test.json",
-  "tsconfig.core.test.agents.json",
-  "tsconfig.core.test.non-agents.json",
+  "tsconfig.core.test.projects.json",
+  "tsconfig.core.test.src.projects.json",
+  "tsconfig.core.test.ui.projects.json",
+  ...TSGO_CORE_TEST_SHARDS.map((shard) => path.basename(shard.config)).filter(
+    (config) => !PACKAGE_TEST_CONFIGS.has(config),
+  ),
 ]);
 
 const CORE_PROD_CONFIGS = new Set(["tsconfig.core.json"]);
 const UI_PROD_CONFIGS = new Set(["tsconfig.ui.json"]);
+const GUARDED_CONFIGS = new Set([
+  ...CORE_PROD_CONFIGS,
+  ...UI_PROD_CONFIGS,
+  ...CORE_TEST_CONFIGS,
+  ...PACKAGE_TEST_CONFIGS,
+]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
 const CORE_PROD_SPARSE_ROOTS = ["packages"];
 const UI_PROD_SPARSE_ROOTS = ["packages", "src", "ui/config", "ui/src"];
 const CORE_TEST_SPARSE_ROOTS = ["packages", "ui/config", "ui/src"];
+const PACKAGE_TEST_SPARSE_ROOTS = ["packages"];
 
 const CORE_PROD_REQUIRED_PATHS = [
   {
@@ -100,15 +113,8 @@ export function getSparseTsgoGuardError(
     sparseCheckoutPatterns,
   }: SparseGuardOptions = {},
 ) {
-  const projectPath = readProjectFlag(args);
-  const projectName = projectPath ? path.basename(projectPath) : null;
-  if (
-    !projectName ||
-    (!CORE_PROD_CONFIGS.has(projectName) &&
-      !UI_PROD_CONFIGS.has(projectName) &&
-      !CORE_TEST_CONFIGS.has(projectName)) ||
-    isMetadataOnlyCommand(args)
-  ) {
+  const projectNames = readProjectNames(args);
+  if (projectNames.length === 0 || isMetadataOnlyCommand(args)) {
     return null;
   }
 
@@ -120,11 +126,17 @@ export function getSparseTsgoGuardError(
 
   const sparsePatterns = sparseCheckoutPatterns ?? getSparseCheckoutPatterns({ cwd });
   const missingPaths = [
-    ...getRequiredSparseRootsForProject(projectName).filter((relativePath) =>
-      sparsePatterns ? !isSparseRootCovered(relativePath, sparsePatterns) : false,
+    ...new Set(
+      projectNames
+        .flatMap(getRequiredSparseRootsForProject)
+        .filter((relativePath) =>
+          sparsePatterns ? !isSparseRootCovered(relativePath, sparsePatterns) : false,
+        ),
     ),
-    ...getRequiredPathsForProject(projectName, cwd, fileExists).filter(
-      (relativePath) => !fileExists(path.join(cwd, relativePath)),
+    ...new Set(
+      projectNames
+        .flatMap((projectName) => getRequiredPathsForProject(projectName, cwd, fileExists))
+        .filter((relativePath) => !fileExists(path.join(cwd, relativePath))),
     ),
   ];
   if (missingPaths.length === 0) {
@@ -132,7 +144,7 @@ export function getSparseTsgoGuardError(
   }
 
   return [
-    `${projectName} cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:`,
+    `${projectNames.join(", ")} cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:`,
     ...missingPaths.map((relativePath) => `- ${relativePath}`),
     "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
   ].join("\n");
@@ -147,6 +159,9 @@ function getRequiredSparseRootsForProject(projectName: string) {
   }
   if (CORE_TEST_CONFIGS.has(projectName)) {
     return CORE_TEST_SPARSE_ROOTS;
+  }
+  if (PACKAGE_TEST_CONFIGS.has(projectName)) {
+    return PACKAGE_TEST_SPARSE_ROOTS;
   }
   return [];
 }
@@ -236,8 +251,20 @@ function normalizeSparsePattern(pattern: string) {
     .replace(/\/+$/, "");
 }
 
-function readProjectFlag(args: readonly string[]) {
-  return readFlagValue(args, "-p") ?? readFlagValue(args, "--project");
+function readProjectNames(args: readonly string[]) {
+  const projectPath = readFlagValue(args, "-p") ?? readFlagValue(args, "--project");
+  const candidates = projectPath
+    ? [projectPath]
+    : args.some((arg) => arg === "-b" || arg === "--build")
+      ? args.filter((arg) => !arg.startsWith("-"))
+      : [];
+  return [
+    ...new Set(candidates.map((candidate) => path.basename(candidate)).filter(isGuardedConfig)),
+  ];
+}
+
+function isGuardedConfig(config: string) {
+  return GUARDED_CONFIGS.has(config);
 }
 
 function isMetadataOnlyCommand(args: readonly string[]) {

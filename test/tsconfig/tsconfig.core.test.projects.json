@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.core.test.src.projects.json" },
+    { "path": "./tsconfig.core.test.ui.projects.json" },
+    { "path": "./tsconfig.test.packages.json" }
+  ]
+}

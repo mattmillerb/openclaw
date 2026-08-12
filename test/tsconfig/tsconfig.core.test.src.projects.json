@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.core.test.agents-root.json" },
+    { "path": "./tsconfig.core.test.agents-other.json" },
+    { "path": "./tsconfig.core.test.gateway.json" },
+    { "path": "./tsconfig.core.test.infra.json" },
+    { "path": "./tsconfig.core.test.commands.json" },
+    { "path": "./tsconfig.core.test.plugins-platform.json" },
+    { "path": "./tsconfig.core.test.config-cli.json" },
+    { "path": "./tsconfig.core.test.messaging.json" },
+    { "path": "./tsconfig.core.test.services.json" },
+    { "path": "./tsconfig.core.test.other.json" }
+  ]
+}

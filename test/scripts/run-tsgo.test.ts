@@ -84,10 +84,54 @@ describe("run-tsgo sparse guard", () => {
     }
 
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.non-agents.json"], {
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.other.json"], {
         cwd,
         isSparseCheckoutEnabled: () => true,
         sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
+      }),
+    ).toBeNull();
+  });
+
+  it("guards the core-test build aggregate", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-b", "test/tsconfig/tsconfig.core.test.projects.json"], {
+        cwd,
+        isSparseCheckoutEnabled: () => true,
+      }),
+    ).toContain("tsconfig.core.test.projects.json cannot be typechecked from this sparse checkout");
+  });
+
+  it("guards core-test build projects after options and alongside other projects", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(
+        [
+          "-b",
+          "--pretty",
+          "false",
+          "tsconfig.extensions.json",
+          "test/tsconfig/tsconfig.core.test.projects.json",
+        ],
+        {
+          cwd,
+          isSparseCheckoutEnabled: () => true,
+        },
+      ),
+    ).toContain("tsconfig.core.test.projects.json cannot be typechecked from this sparse checkout");
+  });
+
+  it("keeps package-test sparse roots package-scoped", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.test.packages.json"], {
+        cwd,
+        fileExists: () => true,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/packages/"],
       }),
     ).toBeNull();
   });
