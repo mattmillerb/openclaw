@@ -347,7 +347,7 @@ describe("runInstallPolicy", () => {
 
     expect(result?.blocked).toEqual({
       code: "security_scan_blocked",
-      reason: `blocked by install policy: ${reasonPrefix}...`,
+      reason: `blocked by install policy: ${reasonPrefix.slice(0, 997)}...`,
     });
   });
 
@@ -474,6 +474,43 @@ describe("runInstallPolicy", () => {
       12,
       Number.MAX_SAFE_INTEGER,
     ]);
+  });
+
+  it("bounds operator-facing warning text without splitting surrogate pairs", async () => {
+    const longText = `${"x".repeat(996)}😀${"y".repeat(100)}`;
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "warn",
+          reason: longText,
+          findings: [
+            {
+              ruleId: longText,
+              severity: "warn",
+              message: longText,
+              file: longText,
+              evidence: longText,
+            },
+          ],
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    const boundedText = [
+      result?.warning?.reason,
+      result?.findings?.[0]?.ruleId,
+      result?.findings?.[0]?.message,
+      result?.findings?.[0]?.file,
+      result?.findings?.[0]?.evidence,
+    ];
+    for (const value of boundedText) {
+      expect(value).toBeDefined();
+      expect(value?.length).toBeLessThanOrEqual(1_000);
+      expect(value?.endsWith("...")).toBe(true);
+      expect(value?.slice(0, -3)).not.toMatch(/[\uD800-\uDBFF]$/);
+    }
   });
 
   it("fingerprints warning reason changes beyond the display limit", async () => {

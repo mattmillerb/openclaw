@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 const MAX_REASON_CHARS = 1000;
 const MAX_FINDINGS = 100;
 const MAX_FINDING_TEXT_CHARS = 1000;
+const TRUNCATION_MARKER = "...";
 
 export type InstallPolicyFinding = {
   ruleId: string;
@@ -65,7 +66,11 @@ const installPolicyFindingSchema = z
   }));
 
 function truncateText(value: string, maxChars: number): string {
-  return truncateWithMarker(value, maxChars, { marker: "...", reserve: 0, trimEnd: false });
+  return truncateWithMarker(value, maxChars, {
+    marker: TRUNCATION_MARKER,
+    reserve: TRUNCATION_MARKER.length,
+    trimEnd: false,
+  });
 }
 
 export function createInstallPolicyFailure(message: string): InstallPolicyResult {

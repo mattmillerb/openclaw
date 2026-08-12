@@ -579,7 +579,7 @@ describe("legacy file install scan compatibility", () => {
     return {
       maxText,
       findings: Array.from({ length: 100 }, (_, index) => ({
-        ruleId: `${String(index)}-${maxText}`,
+        ruleId: `${String(index).padStart(3, "0")}${"r".repeat(997)}`,
         severity: "critical" as const,
         message: maxText,
         file: maxText,
@@ -612,7 +612,82 @@ describe("legacy file install scan compatibility", () => {
     expect(result?.blocked?.reason.length).toBeLessThan(200);
     expect(onInstallPolicyWarning).not.toHaveBeenCalled();
     expect(warnings).toEqual([]);
+    expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
   });
+
+  it("fails closed when a changed warning exceeds the aggregate display limit", async () => {
+    const { findings, maxText } = createMaximumPolicyFindings();
+    runInstallPolicyMock
+      .mockResolvedValueOnce({
+        warning: { reason: "review this plugin", fingerprint: "initial-warning" },
+      })
+      .mockResolvedValueOnce({
+        warning: { reason: maxText, fingerprint: "oversized-warning" },
+        findings,
+      });
+    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+    const warnings: string[] = [];
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: { warn: (message) => warnings.push(message) },
+      onInstallPolicyWarning,
+      pluginId: "payload",
+    });
+
+    expect(result?.blocked).toEqual({
+      code: "security_scan_failed",
+      reason:
+        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+    });
+    expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
+    expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
+    expect(warnings.join("\n")).toContain("review this plugin");
+    expect(warnings.join("\n")).not.toContain(maxText);
+  });
+
+  it.each([
+    { size: 4_000, code: "security_scan_blocked" },
+    { size: 4_001, code: "security_scan_failed" },
+  ] as const)(
+    "enforces the aggregate warning boundary at $size characters",
+    async ({ size, code }) => {
+      const reason = "r".repeat(1_000);
+      const ruleId = "u".repeat(900);
+      const message = "m".repeat(900);
+      const file = "f".repeat(900);
+      const findingPrefix = `[CRITICAL] ${ruleId}: ${message} (${file}) Evidence: `;
+      const guidance = [
+        "To continue:",
+        "  • Rerun interactively and approve the warning.",
+        "  • For reviewed automation, add --acknowledge-install-policy-warning.",
+      ];
+      const withoutEvidence = expectedInstallPolicyNotice({
+        decision: "warn",
+        findings: [findingPrefix],
+        guidance,
+        reason,
+        targetName: "payload",
+        targetType: "plugin",
+      });
+      const evidence = `${"e".repeat(size - withoutEvidence.length - 3)}\ne`;
+      runInstallPolicyMock.mockResolvedValueOnce({
+        warning: { reason, fingerprint: `warning-${String(size)}` },
+        findings: [{ ruleId, severity: "critical", message, file, evidence }],
+      });
+
+      const result = await scanFileInstallSourceRuntime({
+        filePath: "/tmp/payload.js",
+        logger: {},
+        pluginId: "payload",
+      });
+
+      expect(result?.blocked?.code).toBe(code);
+      if (size === 4_000) {
+        expect(result?.blocked?.reason).toHaveLength(4_000);
+      }
+    },
+  );
 
   it("keeps a maximum-size block terminal with a bounded denial", async () => {
     const { findings, maxText } = createMaximumPolicyFindings();
