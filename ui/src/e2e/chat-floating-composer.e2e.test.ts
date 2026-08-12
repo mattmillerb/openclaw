@@ -202,6 +202,54 @@ suite.define(() => {
         const tailBottom = tailBox ? tailBox.y + tailBox.height : endLayout.dockTop;
         expect(endLayout.dockTop - tailBottom).toBeGreaterThanOrEqual(0);
         await captureProof(page, theme, "exact-end");
+
+        for (let index = 0; index < 24; index += 1) {
+          await textarea.fill(
+            `Queued follow-up ${index + 3}: verify the remaining release evidence`,
+          );
+          await textarea.press("Enter");
+        }
+        const composerAdjuncts = page.locator(".chat-composer-adjuncts");
+        await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(26);
+        const overflowLayout = await conversation.evaluate((element) => {
+          const dock = element.querySelector<HTMLElement>(".chat-bottom-dock");
+          const adjuncts = element.querySelector<HTMLElement>(".chat-composer-adjuncts");
+          const composer = element.querySelector<HTMLElement>(".agent-chat__composer-shell");
+          if (!dock || !adjuncts || !composer) {
+            throw new Error("expected dock, composer adjuncts, and composer");
+          }
+          const conversationRect = element.getBoundingClientRect();
+          const dockRect = dock.getBoundingClientRect();
+          const composerRect = composer.getBoundingClientRect();
+          return {
+            adjunctClientHeight: adjuncts.clientHeight,
+            adjunctScrollHeight: adjuncts.scrollHeight,
+            composerBottom: composerRect.bottom,
+            conversationBottom: conversationRect.bottom,
+            dockHeight: dockRect.height,
+            viewportHeight: conversationRect.height,
+          };
+        });
+        expect(overflowLayout.dockHeight).toBeLessThanOrEqual(overflowLayout.viewportHeight + 1);
+        expect(overflowLayout.composerBottom).toBeLessThanOrEqual(
+          overflowLayout.conversationBottom + 1,
+        );
+        expect(overflowLayout.adjunctScrollHeight).toBeGreaterThan(
+          overflowLayout.adjunctClientHeight,
+        );
+
+        await composerAdjuncts.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        const finalQueuedItem = page.locator(".chat-queue__item").last();
+        await expect.poll(async () => finalQueuedItem.isVisible()).toBe(true);
+        const finalQueuedBox = await finalQueuedItem.boundingBox();
+        const adjunctBox = await composerAdjuncts.boundingBox();
+        expect(finalQueuedBox).not.toBeNull();
+        expect(adjunctBox).not.toBeNull();
+        const finalQueuedBottom = finalQueuedBox ? finalQueuedBox.y + finalQueuedBox.height : 0;
+        const adjunctBottom = adjunctBox ? adjunctBox.y + adjunctBox.height : 0;
+        expect(finalQueuedBottom).toBeLessThanOrEqual(adjunctBottom + 1);
       } finally {
         await context.close();
       }

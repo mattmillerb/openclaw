@@ -873,9 +873,7 @@ describe("inline approval card", () => {
     const dock = inlineSurface?.closest(".chat-bottom-dock");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
     expect(dock?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(
-      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-    ).toBe(true);
+    expect(dock?.lastElementChild?.classList.contains("agent-chat__composer-shell")).toBe(true);
     expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
       "expires in 01:00",
     );
@@ -900,7 +898,9 @@ describe("chat run error", () => {
     expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
     expect(alert.querySelector(".chat-run-error__icon svg")).not.toBeNull();
     expect(alert.querySelector("button")).toBeNull();
-    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(
+      alert.parentElement?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
+    ).toBe(true);
   });
 });
 
@@ -1625,9 +1625,12 @@ describe("chat scroll-to-bottom affordance", () => {
     const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
     const dock = container.querySelector(".chat-bottom-dock");
     const queue = container.querySelector(".chat-queue");
+    const composerAdjuncts = queue?.closest(".chat-composer-adjuncts");
     expect(wrapper?.nextElementSibling).toBe(dock);
-    expect(queue?.parentElement).toBe(dock);
-    expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(composerAdjuncts?.parentElement).toBe(dock);
+    expect(
+      composerAdjuncts?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
+    ).toBe(true);
   });
 
   it("hides the scroll-to-bottom button when the transcript is already latest", () => {
