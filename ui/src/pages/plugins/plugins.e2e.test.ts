@@ -148,6 +148,22 @@ const calendarSearchResponse = {
   ],
 } satisfies PluginsSearchResult;
 
+const lobsterSearchResponse = {
+  results: [
+    {
+      score: 1,
+      package: {
+        name: "@openclaw/lobster",
+        displayName: "Lobster",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        runtimeId: "lobster",
+      },
+    },
+  ],
+} satisfies PluginsSearchResult;
+
 const uninstallResult = {
   ok: true,
   pluginId: "calendar-plus",
@@ -858,6 +874,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await row.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
         0,
       );
+      expect((await gateway.getRequests("plugins.install")).length).toBe(2);
+
+      await gateway.setMethodResponse("plugins.search", lobsterSearchResponse);
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
+      await gateway.waitForRequest("plugins.search");
+      const searchRow = page.locator('[data-package-name="@openclaw/lobster"]');
+      await searchRow.waitFor({ state: "visible" });
+      await searchRow.getByText("Checking plugin status…", { exact: false }).waitFor();
+      expect(
+        await searchRow.getByRole("button", { name: "Install Lobster", exact: true }).isDisabled(),
+      ).toBe(true);
       expect((await gateway.getRequests("plugins.install")).length).toBe(2);
 
       await gateway.resolveDeferred("plugins.install", {

@@ -23,6 +23,7 @@ import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-l
 import "../../styles/plugins.css";
 import {
   CLAWHUB_BROWSE_URL,
+  resolvePluginInstallIdentity,
   type PluginCatalogItem,
   type PluginInstallRequest,
   type PluginListResult,
@@ -157,6 +158,19 @@ export function pluginRowKey(pluginId: string): string {
 
 function clawHubRowKey(packageName: string): string {
   return `clawhub:${packageName}`;
+}
+
+function installOperationState(
+  props: PluginsViewProps,
+  request: PluginInstallRequest | undefined,
+  runtimeId?: string,
+): { busy: boolean; outcome?: InstallOutcomeReconciliation } {
+  if (!request) {
+    return { busy: false };
+  }
+  const identity = resolvePluginInstallIdentity(request, props.result?.plugins ?? [], runtimeId);
+  const outcome = props.installOutcomeReconciliations[identity];
+  return { busy: Boolean(props.busy[identity] || outcome), ...(outcome ? { outcome } : {}) };
 }
 
 export function connectorRowKey(connectorId: string): string {
@@ -401,8 +415,8 @@ function renderRowMessage(
   message: PluginRowMessage | undefined,
   busy: boolean,
   props: PluginsViewProps,
+  installOutcome?: InstallOutcomeReconciliation,
 ) {
-  const installOutcome = props.installOutcomeReconciliations[key];
   if (installOutcome) {
     return html`
       <div
@@ -622,6 +636,7 @@ function renderInstallButton(
   name: string,
   request: PluginInstallRequest,
 ) {
+  const { outcome: installOutcome } = installOperationState(props, request);
   return html`
     <button
       type="button"
@@ -635,7 +650,7 @@ function renderInstallButton(
       }}
     >
       ${busy
-        ? props.installOutcomeReconciliations[key]
+        ? installOutcome
           ? t("pluginsPage.checkingInstallOutcome")
           : t("pluginsPage.installing")
         : t("pluginsPage.install")}
@@ -764,7 +779,8 @@ function renderPluginRow(
   includePackageName = false,
 ): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
+  const installOperation = installOperationState(props, plugin.install);
+  const busy = Boolean(props.busy[key] || installOperation.busy);
   return html`
     <article
       class="settings-row plugins-item plugins-item--clickable"
@@ -813,7 +829,7 @@ function renderPluginRow(
             ${plugin.error}
           </div>`
         : nothing}
-      ${renderRowMessage(key, props.messages[key], busy, props)}
+      ${renderRowMessage(key, props.messages[key], busy, props, installOperation.outcome)}
     </article>
   `;
 }
@@ -943,7 +959,7 @@ function renderConnectorRow(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
+  const busy = Boolean(props.busy[key]);
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -1030,7 +1046,9 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
+  const installRequest = { source: "clawhub", packageName: pkg.name } as const;
+  const installOperation = installOperationState(props, installRequest, pkg.runtimeId);
+  const busy = Boolean(props.busy[key] || installOperation.busy);
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1075,12 +1093,9 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       <div class="settings-row__control">
         ${installed
           ? html`${rowStateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
-          : renderInstallButton(props, busy, key, pkg.displayName, {
-              source: "clawhub",
-              packageName: pkg.name,
-            })}
+          : renderInstallButton(props, busy, key, pkg.displayName, installRequest)}
       </div>
-      ${renderRowMessage(key, props.messages[key], busy, props)}
+      ${renderRowMessage(key, props.messages[key], busy, props, installOperation.outcome)}
     </article>
   `;
 }
@@ -1203,7 +1218,8 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = Boolean(props.busy[key] || props.installOutcomeReconciliations[key]);
+  const installOperation = installOperationState(props, plugin.install);
+  const busy = Boolean(props.busy[key] || installOperation.busy);
   return html`
     <openclaw-modal-dialog
       label=${plugin.name}
@@ -1281,7 +1297,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
                 ${plugin.error}
               </div>`
             : nothing}
-          ${renderRowMessage(key, props.messages[key], busy, props)}
+          ${renderRowMessage(key, props.messages[key], busy, props, installOperation.outcome)}
           <div class="plugins-detail__meta">
             ${plugin.origin
               ? detailMetaRow(t("pluginsPage.detailOrigin"), originLabel(plugin.origin))

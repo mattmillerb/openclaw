@@ -770,18 +770,33 @@ describe("renderPlugins", () => {
     const plugin = createPlugin({
       id: "lobster",
       name: "Lobster",
+      packageName: "@openclaw/lobster",
       installed: false,
       enabled: false,
       state: "disabled",
-      install: { source: "clawhub", packageName: "@openclaw/lobster" },
+      install: { source: "official", pluginId: "lobster" },
     });
     const key = pluginRowKey(plugin.id);
     const onRetryInstallOutcome = vi.fn();
     const container = mount(
       createProps({
         activeTab: "discover",
+        query: "lobster",
         result: createResult([plugin]),
         installOutcomeReconciliations: { [key]: "failed" },
+        searchResults: [
+          {
+            score: 1,
+            package: {
+              name: "@openclaw/lobster",
+              displayName: "Lobster",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              runtimeId: "lobster",
+            },
+          },
+        ],
         onRetryInstallOutcome,
       }),
     );
@@ -793,6 +808,15 @@ describe("renderPlugins", () => {
     const install = actionButton(row ?? container, "Install Lobster");
     expect(install?.disabled).toBe(true);
     expect(normalizedText(install)).toBe("Checking…");
+    const searchRow = container.querySelector<HTMLElement>(
+      '[data-package-name="@openclaw/lobster"]',
+    );
+    const searchInstall = actionButton(searchRow ?? container, "Install Lobster");
+    expect(searchInstall?.disabled).toBe(true);
+    expect(normalizedText(searchInstall)).toBe("Checking…");
+    expect(normalizedText(searchRow?.querySelector('[role="alert"]') ?? null)).toContain(
+      "couldn’t confirm whether this plugin was installed",
+    );
     row?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
     expect(onRetryInstallOutcome).toHaveBeenCalledOnce();
   });

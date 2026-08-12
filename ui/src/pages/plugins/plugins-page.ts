@@ -35,6 +35,7 @@ import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
+  resolvePluginInstallIdentity,
   runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
@@ -146,6 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
+  private readonly pendingInstallTargets = new Set<string>();
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -372,16 +374,16 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private captureUnknownInstallOutcomes() {
-    // Once an acknowledged request crosses a connection epoch, only a fresh catalog can
+    // Once an install crosses a connection epoch, only a fresh catalog can
     // prove whether it committed. Keep that safety gate separate from dismissible messages.
     const nextMessages = { ...this.messages };
     const nextReconciliations = { ...this.installOutcomeReconciliations };
+    for (const identity of this.pendingInstallTargets) {
+      nextReconciliations[identity] = "checking";
+    }
     for (const [key, message] of Object.entries(this.messages)) {
       if (!message.installPolicyWarning) {
         continue;
-      }
-      if (this.busy[key]) {
-        nextReconciliations[key] = "checking";
       }
       delete nextMessages[key];
     }
@@ -783,17 +785,25 @@ class PluginsPage extends OpenClawLightDomElement {
         text: formatUiError(error),
       });
     },
-    options: { preserveMessageWhilePending?: boolean } = {},
+    options: {
+      operationKey?: string;
+      pendingInstallTarget?: string;
+      preserveMessageWhilePending?: boolean;
+    } = {},
   ): Promise<void> {
     const scope = this.gateway.capture();
-    if (!scope || !this.canMutate() || this.busy[rowKey]) {
+    const operationKey = options.operationKey ?? rowKey;
+    if (!scope || !this.canMutate() || this.busy[operationKey]) {
       return;
     }
     const mutationToken = ++this.mutationToken;
-    this.mutationTokens.set(rowKey, mutationToken);
+    this.mutationTokens.set(operationKey, mutationToken);
+    if (options.pendingInstallTarget) {
+      this.pendingInstallTargets.add(options.pendingInstallTarget);
+    }
     const isCurrent = () =>
-      this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
-    this.setBusy(rowKey, true);
+      this.gateway.isCurrent(scope) && this.mutationTokens.get(operationKey) === mutationToken;
+    this.setBusy(operationKey, true);
     if (!options.preserveMessageWhilePending) {
       this.setMessage(rowKey, null);
     }
@@ -812,14 +822,24 @@ class PluginsPage extends OpenClawLightDomElement {
         onError(error);
       }
     } finally {
-      if (this.mutationTokens.get(rowKey) === mutationToken) {
-        this.mutationTokens.delete(rowKey);
-        this.setBusy(rowKey, false);
+      if (this.mutationTokens.get(operationKey) === mutationToken) {
+        this.mutationTokens.delete(operationKey);
+        this.setBusy(operationKey, false);
+      }
+      if (options.pendingInstallTarget) {
+        this.pendingInstallTargets.delete(options.pendingInstallTarget);
+        if (!this.gateway.isCurrent(scope)) {
+          this.installOutcomeReconciliations = {
+            ...this.installOutcomeReconciliations,
+            [options.pendingInstallTarget]: "checking",
+          };
+        }
       }
     }
   }
 
   private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
+    const operationKey = resolvePluginInstallIdentity(request, this.result?.plugins ?? []);
     await this.runPluginMutation(
       rowKey,
       (client) => installPlugin(client, request),
@@ -860,6 +880,8 @@ class PluginsPage extends OpenClawLightDomElement {
         });
       },
       {
+        operationKey,
+        pendingInstallTarget: operationKey,
         preserveMessageWhilePending: request.installPolicyWarningAcknowledgement !== undefined,
       },
     );
