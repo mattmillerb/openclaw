@@ -347,7 +347,13 @@ function renderProfiles(card: ModelProviderCard, props: ModelProvidersViewProps)
                 ?disabled=${busy || mutationDisabled || index === 0}
                 @click=${() => {
                   const next = profiles.map((candidate) => candidate.profileId);
-                  [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                  const previous = next[index - 1];
+                  const current = next[index];
+                  if (previous === undefined || current === undefined) {
+                    return;
+                  }
+                  next[index - 1] = current;
+                  next[index] = previous;
                   props.onProfileOrderChange(card.id, provider, next);
                 }}
               >
@@ -361,7 +367,13 @@ function renderProfiles(card: ModelProviderCard, props: ModelProvidersViewProps)
                 ?disabled=${busy || mutationDisabled || index === profiles.length - 1}
                 @click=${() => {
                   const next = profiles.map((candidate) => candidate.profileId);
-                  [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                  const current = next[index];
+                  const following = next[index + 1];
+                  if (current === undefined || following === undefined) {
+                    return;
+                  }
+                  next[index] = following;
+                  next[index + 1] = current;
                   props.onProfileOrderChange(card.id, provider, next);
                 }}
               >
