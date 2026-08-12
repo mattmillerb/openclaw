@@ -574,6 +574,86 @@ describe("legacy file install scan compatibility", () => {
     );
   });
 
+  function createMaximumPolicyFindings() {
+    const maxText = "x".repeat(1_000);
+    return {
+      maxText,
+      findings: Array.from({ length: 100 }, (_, index) => ({
+        ruleId: `${String(index)}-${maxText}`,
+        severity: "critical" as const,
+        message: maxText,
+        file: maxText,
+        evidence: maxText,
+      })),
+    };
+  }
+
+  it("fails closed when a maximum-size warning exceeds the aggregate display limit", async () => {
+    const { findings, maxText } = createMaximumPolicyFindings();
+    runInstallPolicyMock.mockResolvedValue({
+      warning: { reason: maxText, fingerprint: "oversized-warning" },
+      findings,
+    });
+    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+    const warnings: string[] = [];
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: { warn: (message) => warnings.push(message) },
+      onInstallPolicyWarning,
+      pluginId: "payload",
+    });
+
+    expect(result?.blocked).toEqual({
+      code: "security_scan_failed",
+      reason:
+        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+    });
+    expect(result?.blocked?.reason.length).toBeLessThan(200);
+    expect(onInstallPolicyWarning).not.toHaveBeenCalled();
+    expect(warnings).toEqual([]);
+  });
+
+  it("keeps a maximum-size block terminal with a bounded denial", async () => {
+    const { findings, maxText } = createMaximumPolicyFindings();
+    runInstallPolicyMock.mockResolvedValue({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: `blocked by install policy: ${maxText}`,
+      },
+      findings,
+    });
+    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: {},
+      onInstallPolicyWarning,
+      pluginId: "payload",
+    });
+
+    expect(result?.blocked?.code).toBe("security_scan_blocked");
+    expect(result?.blocked?.reason).toContain("Findings omitted");
+    expect(result?.blocked?.reason.length).toBeLessThanOrEqual(4_000);
+    expect(onInstallPolicyWarning).not.toHaveBeenCalled();
+  });
+
+  it("bounds maximum-size allow findings without blocking the install", async () => {
+    const { findings } = createMaximumPolicyFindings();
+    runInstallPolicyMock.mockResolvedValue({ findings });
+    const warnings: string[] = [];
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: { warn: (message) => warnings.push(message) },
+      pluginId: "payload",
+    });
+
+    expect(result).toBeUndefined();
+    expect(warnings.join("\n")).toContain("additional findings omitted");
+    expect(warnings.join("\n").length).toBeLessThanOrEqual(4_000);
+  });
+
   it.each(["security_scan_blocked", "security_scan_failed"] as const)(
     "does not let acknowledgement override %s",
     async (code) => {

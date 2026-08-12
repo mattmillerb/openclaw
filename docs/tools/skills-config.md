@@ -187,7 +187,11 @@ absent. Operator-facing reason and finding text are limited to 1,000 characters.
 OpenClaw retains at most 100 normalized findings for display. Only a `warn`
 response with more than 100 valid findings fails closed and cannot be
 acknowledged; `allow` and `block` retain the first 100. A warning stops the
-install before commit. Interactive CLI
+install before commit. A `warn` review whose sanitized reason and findings
+exceed the 4,000-character aggregate display limit fails closed without
+presenting a partial review. An over-budget `block` remains terminal with a
+bounded denial, while over-budget findings on `allow` are summarized in bounded
+diagnostic output. Interactive CLI
 plugin and skill commands ask the operator to type the target name using the
 same `install anyway` or `update anyway` copy as suspicious ClawHub releases,
 then run policy again before continuing. Declined and non-interactive commands

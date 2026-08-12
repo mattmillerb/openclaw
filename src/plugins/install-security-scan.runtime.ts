@@ -26,6 +26,12 @@ type InstallScanLogger = {
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 const INSTALL_POLICY_BLOCK_REASON_PREFIX = "blocked by install policy: ";
 const INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG = "--acknowledge-install-policy-warning";
+const MAX_INSTALL_POLICY_NOTICE_CHARS = 4_000;
+const INSTALL_POLICY_REVIEW_GUIDANCE = [
+  "To continue:",
+  "  • Rerun interactively and approve the warning.",
+  `  • For reviewed automation, add ${INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG}.`,
+];
 
 type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
 
@@ -103,6 +109,34 @@ export type InstallSecurityScanResult = {
   };
 };
 
+function failOversizedInstallPolicyWarning(params: {
+  result: Awaited<ReturnType<typeof runInstallPolicy>>;
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): InstallSecurityScanResult | undefined {
+  if (!params.result?.warning) {
+    return undefined;
+  }
+  const notice = formatInstallPolicyNotice({
+    decision: "warn",
+    findings: params.result.findings,
+    guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+    reason: params.result.warning.reason,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (notice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    return undefined;
+  }
+  return {
+    blocked: {
+      code: "security_scan_failed",
+      reason:
+        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+    },
+  };
+}
+
 function formatBlockedInstallPolicyResult(params: {
   blocked: NonNullable<InstallSecurityScanResult["blocked"]>;
   findings?: InstallPolicyFinding[];
@@ -116,16 +150,34 @@ function formatBlockedInstallPolicyResult(params: {
     return { blocked: params.blocked };
   }
   const reason = params.blocked.reason.slice(INSTALL_POLICY_BLOCK_REASON_PREFIX.length);
+  const notice = formatInstallPolicyNotice({
+    decision: "block",
+    findings: params.findings,
+    reason,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    const compactNotice = `${formatInstallPolicyNotice({
+      decision: "block",
+      reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    })}\n  Findings omitted: policy review exceeds the 4,000-character display limit.`;
+    return {
+      blocked: {
+        ...params.blocked,
+        reason:
+          compactNotice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS
+            ? compactNotice
+            : "Install blocked by policy: review exceeds the 4,000-character display limit.",
+      },
+    };
+  }
   return {
     blocked: {
       ...params.blocked,
-      reason: formatInstallPolicyNotice({
-        decision: "block",
-        findings: params.findings,
-        reason,
-        targetName: params.targetName,
-        targetType: params.targetType,
-      }),
+      reason: notice,
     },
   };
 }
@@ -720,14 +772,40 @@ async function runOperatorInstallPolicy(params: {
       );
       return;
     }
-    for (const finding of result?.findings ?? []) {
-      if (finding.severity === "critical" || finding.severity === "warn") {
-        params.logger.warn?.(`Install policy: ${formatInstallPolicyFinding(finding)}`);
+    const messages = (result?.findings ?? [])
+      .filter((finding) => finding.severity === "critical" || finding.severity === "warn")
+      .map((finding) => `Install policy: ${formatInstallPolicyFinding(finding)}`);
+    if (
+      messages.reduce((length, message) => length + message.length + 1, 0) <=
+      MAX_INSTALL_POLICY_NOTICE_CHARS
+    ) {
+      for (const message of messages) {
+        params.logger.warn?.(message);
       }
+      return;
     }
+    const omittedMessage =
+      "Install policy: additional findings omitted because the 4,000-character log limit was reached.";
+    let remaining = MAX_INSTALL_POLICY_NOTICE_CHARS - omittedMessage.length - 1;
+    for (const message of messages) {
+      if (message.length + 1 > remaining) {
+        continue;
+      }
+      params.logger.warn?.(message);
+      remaining -= message.length + 1;
+    }
+    params.logger.warn?.(omittedMessage);
   };
 
   const result = await evaluatePolicy();
+  const presentationFailure = failOversizedInstallPolicyWarning({
+    result,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (presentationFailure) {
+    return presentationFailure;
+  }
   if (result?.blocked) {
     return formatBlockedInstallPolicyResult({
       blocked: result.blocked,
@@ -747,11 +825,7 @@ async function runOperatorInstallPolicy(params: {
         reason: formatInstallPolicyNotice({
           decision: "warn",
           findings: result.findings,
-          guidance: [
-            "To continue:",
-            "  • Rerun interactively and approve the warning.",
-            `  • For reviewed automation, add ${INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG}.`,
-          ],
+          guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
           reason: result.warning.reason,
           targetName: params.targetName,
           targetType: params.targetType,
@@ -767,6 +841,14 @@ async function runOperatorInstallPolicy(params: {
   });
   if (acknowledgement.status === "approved") {
     const reevaluated = await evaluatePolicy();
+    const reevaluatedPresentationFailure = failOversizedInstallPolicyWarning({
+      result: reevaluated,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (reevaluatedPresentationFailure) {
+      return reevaluatedPresentationFailure;
+    }
     if (reevaluated?.blocked) {
       return formatBlockedInstallPolicyResult({
         blocked: reevaluated.blocked,
