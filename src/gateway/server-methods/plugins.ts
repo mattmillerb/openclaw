@@ -27,7 +27,7 @@ import {
   type ManagedPluginInstallRequest,
   type ManagedPluginSourceInstallRequest,
 } from "../../plugins/management-service.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { readInstallPolicyWarningErrorDetails } from "../install-policy-warning-error-details.js";
@@ -48,6 +48,24 @@ const installPolicyAcknowledgements = resolveGlobalMap<string, InstallPolicyAckn
   Symbol.for("openclaw.installPolicyAcknowledgements"),
   "close-and-restart",
 );
+const pendingPluginLifecycleOperations = resolveGlobalSet<Promise<unknown>>(
+  Symbol.for("openclaw.pendingPluginLifecycleOperations"),
+  "close-only",
+);
+
+async function runTrackedPluginLifecycleOperation<T>(run: () => Promise<T>): Promise<T> {
+  const operation = Promise.resolve().then(run);
+  pendingPluginLifecycleOperations.add(operation);
+  try {
+    return await operation;
+  } finally {
+    pendingPluginLifecycleOperations.delete(operation);
+  }
+}
+
+async function waitForPendingPluginLifecycleOperations(): Promise<void> {
+  await Promise.allSettled([...pendingPluginLifecycleOperations]);
+}
 
 function installPolicyRequestKey(request: PluginsInstallParams): string {
   return request.source === "clawhub"
@@ -158,7 +176,11 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, await listManagedPlugins({ config: context.getRuntimeConfig() }), undefined);
+      // Handler operations can outlive a disconnected client, including while queued for the
+      // lifecycle lease. Reconnect reads wait for every earlier handler to reach a terminal state.
+      await waitForPendingPluginLifecycleOperations();
+      const result = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      respond(true, result, undefined);
     } catch (error) {
       respond(
         false,
@@ -227,7 +249,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await installManagedPlugin({ request: managedInstallRequest(params) });
+      const result = await runTrackedPluginLifecycleOperation(() =>
+        installManagedPlugin({ request: managedInstallRequest(params) }),
+      );
       respond(
         true,
         {
@@ -283,7 +307,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await uninstallManagedPlugin({ pluginId: params.pluginId });
+      const result = await runTrackedPluginLifecycleOperation(() =>
+        uninstallManagedPlugin({ pluginId: params.pluginId }),
+      );
       respond(
         true,
         {
@@ -316,10 +342,12 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await setManagedPluginEnabled({
-        pluginId: params.pluginId,
-        enabled: params.enabled,
-      });
+      const result = await runTrackedPluginLifecycleOperation(() =>
+        setManagedPluginEnabled({
+          pluginId: params.pluginId,
+          enabled: params.enabled,
+        }),
+      );
       respond(
         true,
         {

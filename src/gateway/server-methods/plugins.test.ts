@@ -129,6 +129,55 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
+  it("waits for lifecycle mutations before returning reconnect catalog state", async () => {
+    let finishInstall!: (value: { plugin: typeof workboard }) => void;
+    const pendingInstall = new Promise<{ plugin: typeof workboard }>((resolve) => {
+      finishInstall = resolve;
+    });
+    managementMocks.install.mockReturnValue(pendingInstall);
+    managementMocks.list.mockResolvedValue({
+      plugins: [workboard],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const install = callHandler("plugins.install", { source: "official", pluginId: "workboard" });
+    await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledOnce());
+    await drainGlobalSingletonLifecycleState("restart");
+    const list = callHandler("plugins.list", {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(managementMocks.list).not.toHaveBeenCalled();
+
+    finishInstall({ plugin: workboard });
+    await install;
+    expect((await list).response).toMatchObject({ plugins: [workboard] });
+    expect(managementMocks.list).toHaveBeenCalledOnce();
+  });
+
+  it("releases reconnect catalog reads after a lifecycle mutation fails", async () => {
+    let failInstall!: (error: Error) => void;
+    const pendingInstall = new Promise<never>((_resolve, reject) => {
+      failInstall = reject;
+    });
+    managementMocks.install.mockReturnValue(pendingInstall);
+    managementMocks.list.mockResolvedValue({
+      plugins: [workboard],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const install = callHandler("plugins.install", { source: "official", pluginId: "workboard" });
+    await vi.waitFor(() => expect(managementMocks.install).toHaveBeenCalledOnce());
+    const list = callHandler("plugins.list", {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(managementMocks.list).not.toHaveBeenCalled();
+
+    failInstall(new Error("install failed"));
+    expect((await install).error).toMatchObject({ code: "UNAVAILABLE" });
+    expect((await list).response).toMatchObject({ plugins: [workboard] });
+    expect(managementMocks.list).toHaveBeenCalledOnce();
+  });
+
   it("maps plugin-only ClawHub search results to the public DTO", async () => {
     searchMock.mockResolvedValue([
       {
